@@ -344,7 +344,6 @@ jobs:
           mv oImage Image
           rm -f patch_linux
           echo "KPM patch applied to dist/Image ✓"
-          echo "KPM patch applied to dist/Image ✓"
       # ─────────────────────────────────────────────────
       # 6. PACKAGE ANYKERNEL3
       # ─────────────────────────────────────────────────
