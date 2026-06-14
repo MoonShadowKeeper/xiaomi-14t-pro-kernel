@@ -95,12 +95,26 @@ jobs:
           cd kernel_workspace
 
           if [ -d .repo ]; then
-            echo "Reusing cached workspace — resetting local changes (SukiSU/SUSFS/configs)"
+            echo "Reusing cached workspace — clearing stale locks + local changes"
+            # Remove stale lock files left by interrupted fetches/syncs
+            find .repo -name '*.lock' -delete 2>/dev/null || true
+            find . -path '*/.git/*.lock' -delete 2>/dev/null || true
+            find . -name 'shallow.lock' -delete 2>/dev/null || true
             repo forall -c 'git reset --hard -q; git clean -fdq' 2>/dev/null || true
             repo init --depth=1 \
               -u https://android.googlesource.com/kernel/manifest \
               -b "${{ github.event.inputs.ACK_BRANCH }}"
-            repo sync -c -j"$(nproc)" --no-tags --force-sync --optimized-fetch
+            if ! repo sync -c -j"$(nproc)" --no-tags --force-sync --optimized-fetch; then
+              echo "Incremental sync failed — wiping cache and doing a clean sync"
+              cd ..
+              rm -rf kernel_workspace
+              mkdir -p kernel_workspace
+              cd kernel_workspace
+              repo init --depth=1 \
+                -u https://android.googlesource.com/kernel/manifest \
+                -b "${{ github.event.inputs.ACK_BRANCH }}"
+              repo sync -c -j"$(nproc)" --no-tags --fail-fast
+            fi
           else
             echo "Fresh workspace — full repo init + sync"
             repo init --depth=1 \
