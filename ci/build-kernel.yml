@@ -213,6 +213,19 @@ jobs:
           echo "Appended feature configs to $DEFCFG"
           tail -50 "$DEFCFG"
 
+      - name: 🩹 Disable check_defconfig (we add extra configs)
+        run: |
+          cd kernel_workspace/common
+          # Kleaf runs POST_DEFCONFIG_CMDS="check_defconfig" which fails because our
+          # appended options make gki_defconfig diverge from savedefconfig form.
+          for f in build.config.gki build.config.gki.aarch64; do
+            if [ -f "$f" ] && grep -q "check_defconfig" "$f"; then
+              sed -i 's/check_defconfig//g' "$f"
+              echo "Neutralized check_defconfig in $f"
+            fi
+          done
+          grep -rn "POST_DEFCONFIG_CMDS" build.config.* || true
+
       # ─────────────────────────────────────────────────
       # 5. BUILD WITH BAZEL/KLEAF
       # ─────────────────────────────────────────────────
