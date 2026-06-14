@@ -275,7 +275,7 @@ jobs:
           CONFIG_DEFAULT_TCP_CONG="bbr"
           CONFIG_NET_SCH_FQ=y
           CONFIG_NET_SCH_FQ_CODEL=y
-          CONFIG_WIREGUARD=y
+          CONFIG_RFKILL=y
 
           CONFIG_ZSMALLOC=m
           CONFIG_ZRAM=m
@@ -497,7 +497,7 @@ jobs:
             - DroidSpaces-OSS
             - WildKernels branding: `6.1.138-android14-Wild`
             - WildKernels module version bypass for vendor modules
-            - Networking FULL: ipset, BBR, FQ, FQ_CODEL, WireGuard
+            - Networking FULL: ipset, BBR, FQ, FQ_CODEL, RFKILL
             - ZRAM + ZSTD
             - NTFS3 + ExFAT
             - MGLRU
