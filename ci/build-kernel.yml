@@ -355,6 +355,9 @@ jobs:
           path: |
             ${{ env.ZIP_PATH }}
             kernel_workspace/dist/Image*
+            kernel_workspace/dist/boot.img
+            kernel_workspace/dist/boot-lz4.img
+            kernel_workspace/dist/boot-gz.img
             build.log
           retention-days: 7
 
