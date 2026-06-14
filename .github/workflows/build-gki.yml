@@ -114,12 +114,13 @@ jobs:
         # Fix Hunk #1 if it didn't apply (script is idempotent — safe to always run)
         python3 "$GITHUB_WORKSPACE/scripts/fix_susfs_namespace.py"
 
-        # Final verification
-        grep -q 'CONFIG_KSU_SUSFS_SUS_MOUNT' fs/namespace.c || {
-          echo "::error::namespace.c still missing SUSFS after all attempts"
+        # Final verification: check for the specific include from hunk #1
+        # (not just CONFIG_KSU_SUSFS_SUS_MOUNT which hunks 2-9 also add)
+        grep -q 'susfs_def.h' fs/namespace.c || {
+          echo "::error::susfs_def.h include missing from namespace.c — hunk #1 injection failed"
           exit 1
         }
-        echo "SUSFS patch step complete"
+        echo "SUSFS patch step complete — susfs_def.h confirmed in namespace.c"
 
     - name: Apply SukiSU Ultra (KernelSU)
       run: |

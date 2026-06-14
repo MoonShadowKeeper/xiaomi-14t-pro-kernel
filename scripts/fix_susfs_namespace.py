@@ -10,9 +10,14 @@ import sys
 with open('fs/namespace.c', 'r') as f:
     lines = f.readlines()
 
-# Already patched?
-if any('CONFIG_KSU_SUSFS_SUS_MOUNT' in l for l in lines):
-    print(">> namespace.c already contains SUSFS — skipping")
+# Check specifically for the hunk #1 content:
+# - the susfs_def.h include guarded by CONFIG_KSU_SUSFS_SUS_MOUNT
+# Do NOT check just for CONFIG_KSU_SUSFS_SUS_MOUNT — hunks 2-9 also add that
+# string elsewhere in the file and would cause a false-positive skip.
+hunk1_applied = any('susfs_def.h' in l for l in lines)
+
+if hunk1_applied:
+    print(">> namespace.c hunk #1 already applied (susfs_def.h found) — skipping")
     sys.exit(0)
 
 # --- Block 1: inject after mnt_idmapping.h ---
