@@ -18,11 +18,7 @@ jobs:
       SUSFS_BRANCH: gki-android14-6.1
       SUSFS_PATCH: 50_add_susfs_in_gki-android14-6.1.patch
       GKI_VERSION: "6.1"
-      KERNEL_VERSION: "6.1.118"
-      COMPILATION_TIME: "2025-11-17"
-      SUKISU_VERSION: "40128"
-      SUSFS_VERSION: "2.0.0"
-      MANAGER_NAME: "SukiSU-Ultra"
+
 
     defaults:
       run:
@@ -114,6 +110,8 @@ jobs:
         cp -rv ../susfs4ksu/kernel_patches/include/linux/* include/linux/
 
         # Apply the vendored SUSFS patch with Xiaomi 14T GKI context fixes.
+        patch -p1 --forward --dry-run \
+          < "$GITHUB_WORKSPACE/patches/50_add_susfs_in_gki-android14-6.1-xiaomi14t.patch"
         patch -p1 --forward \
           < "$GITHUB_WORKSPACE/patches/50_add_susfs_in_gki-android14-6.1-xiaomi14t.patch"
 
@@ -252,6 +250,33 @@ jobs:
         fi
 
         mapfile -t RELEASE_CONFIGS < <(find "$WORKSPACE" -maxdepth 1 -name "kernel-Xiaomi-14T-Pro-GKI-${GKI_VERSION}.config" -type f)
+
+        KERNEL_VERSION=$(make -s -C "$WORKSPACE/common" kernelversion 2>/dev/null || true)
+        if [[ -z "$KERNEL_VERSION" ]]; then
+          KERNEL_VERSION=$(awk '
+            /^VERSION =/ { v=$3 }
+            /^PATCHLEVEL =/ { p=$3 }
+            /^SUBLEVEL =/ { s=$3 }
+            /^EXTRAVERSION =/ { e=$3 }
+            END { if (v && p && s) printf "%s.%s.%s%s", v, p, s, e }
+          ' "$WORKSPACE/common/Makefile")
+        fi
+        KERNEL_VERSION=${KERNEL_VERSION:-unknown}
+
+        COMPILATION_TIME=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
+        MANAGER_NAME="SukiSU-Ultra"
+        SUKISU_VERSION=$(grep -RhoE 'SukiSU[^0-9]*[0-9]+' "$WORKSPACE/common/drivers/kernelsu" 2>/dev/null | grep -oE '[0-9]+' | sort -nr | head -1 || true)
+        if [[ -z "$SUKISU_VERSION" ]]; then
+          SUKISU_VERSION=$(grep -RhoE 'KSU_VERSION[^0-9]*[0-9]+' "$WORKSPACE/common/drivers/kernelsu" 2>/dev/null | grep -oE '[0-9]+' | sort -nr | head -1 || true)
+        fi
+        SUKISU_VERSION=${SUKISU_VERSION:-unknown}
+
+        SUSFS_VERSION=$(grep -RhoE 'SUSFS_VERSION[^0-9]*[0-9]+(\.[0-9]+)*' \
+          "$WORKSPACE/common/fs/susfs.c" \
+          "$WORKSPACE/common/include/linux/susfs.h" \
+          "$WORKSPACE/common/include/linux/susfs_def.h" 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)*' | head -1 || true)
+        SUSFS_VERSION=${SUSFS_VERSION:-unknown}
+
         RELEASE_TAG="xiaomi-14t-pro-gki-${KERNEL_VERSION}-sukisu-${SUKISU_VERSION}-susfs-${SUSFS_VERSION}-${GITHUB_RUN_NUMBER}"
         RELEASE_TITLE="Xiaomi 14T Pro GKI ${KERNEL_VERSION} | ${MANAGER_NAME} ${SUKISU_VERSION} | SUSFS ${SUSFS_VERSION}"
 
