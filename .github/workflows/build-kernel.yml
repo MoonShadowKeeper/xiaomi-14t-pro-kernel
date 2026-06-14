@@ -34,8 +34,8 @@ env:
   KERNEL_VERSION: "6.1.138"
   ARCH: arm64
   SUKISU_REPO: "SukiSU-Ultra/SukiSU-Ultra"
-  SUKISU_BRANCH: "susfs-main"
-  SUSFS_REPO: "simonpunk/susfs4ksu"
+  SUKISU_REF: "v4.1.3"
+  SUSFS_GITLAB: "https://gitlab.com/simonpunk/susfs4ksu.git"
   TZ: "UTC"
   HOME: "/root"
 
@@ -111,7 +111,7 @@ jobs:
         run: |
           cd kernel_workspace/common
           curl -LSs "https://raw.githubusercontent.com/${{ env.SUKISU_REPO }}/main/kernel/setup.sh" -o /tmp/sukisu_setup.sh
-          bash /tmp/sukisu_setup.sh "${{ env.SUKISU_BRANCH }}"
+          bash /tmp/sukisu_setup.sh "${{ env.SUKISU_REF }}"
           echo "SukiSU Ultra integrated ✓"
 
       - name: 🕵️ Apply SUSFS v2.1+ patches
@@ -120,7 +120,7 @@ jobs:
           rm -rf "$SUSFS_DIR"
           git clone --depth=1 \
             --branch "${{ github.event.inputs.SUSFS_BRANCH }}" \
-            "https://github.com/${{ env.SUSFS_REPO }}" "$SUSFS_DIR"
+            "${{ env.SUSFS_GITLAB }}" "$SUSFS_DIR"
 
           cd kernel_workspace/common
 
