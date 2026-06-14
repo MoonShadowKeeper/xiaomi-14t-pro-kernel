@@ -323,7 +323,7 @@ jobs:
           do.cleanuponabort=0
           device.name1=rothko
           device.name2=xiaomi14tpro
-          supported.versions=14-15
+          supported.versions=
           supported.patchlevels=
           '; }
           block=/dev/block/bootdevice/by-name/boot;
