@@ -46,27 +46,30 @@ env:
 jobs:
   build:
     name: Build Kernel
-    runs-on: ubuntu-22.04
+    runs-on: self-hosted
     timeout-minutes: 120
 
     steps:
       # ─────────────────────────────────────────────────
       # 1. SETUP ENVIRONMENT
       # ─────────────────────────────────────────────────
-      - name: 🛠️ Install build dependencies
+      - name: 🧹 Clean workspace (self-hosted persists between runs)
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            bc bison build-essential ca-certificates ccache curl flex \
-            git kmod libelf-dev libssl-dev libncurses-dev lz4 make \
-            ninja-build pahole perl python3 python3-pip rsync \
-            unzip wget xz-utils zip zstd file binutils-aarch64-linux-gnu \
-            gcc-aarch64-linux-gnu
+          rm -rf kernel_source AnyKernel3 *.zip build.log || true
 
-      - name: 🕐 Set swap space (12 GB)
-        uses: pierotofy/set-swap-space@master
-        with:
-          swap-size-gb: 12
+      - name: 🛠️ Ensure build dependencies (best-effort, needs sudo)
+        run: |
+          if command -v apt-get >/dev/null 2>&1; then
+            sudo apt-get update -qq || true
+            sudo apt-get install -y --no-install-recommends \
+              bc bison build-essential ca-certificates ccache curl flex \
+              git kmod libelf-dev libssl-dev libncurses-dev lz4 make \
+              ninja-build pahole perl python3 python3-pip rsync \
+              unzip wget xz-utils zip zstd file binutils-aarch64-linux-gnu \
+              gcc-aarch64-linux-gnu || echo "::warning::Could not install deps automatically — ensure they are present on the runner"
+          else
+            echo "::warning::apt-get not found — make sure build deps are pre-installed on this self-hosted runner"
+          fi
 
       # ─────────────────────────────────────────────────
       # 2. TOOLCHAIN — AOSP Clang
@@ -385,3 +388,13 @@ jobs:
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ─────────────────────────────────────────────────
+      # 10. CLEANUP (self-hosted runner persists state)
+      # ─────────────────────────────────────────────────
+      - name: 🧹 Clean up build artifacts from runner
+        if: always()
+        run: |
+          rm -rf kernel_source AnyKernel3 *.zip || true
+          rm -rf $HOME/toolchains/clang/*.tar.gz /tmp/clang.tar.gz /tmp/susfs4ksu /tmp/sukisu_setup.sh || true
+          echo "Runner cleaned ✓"
