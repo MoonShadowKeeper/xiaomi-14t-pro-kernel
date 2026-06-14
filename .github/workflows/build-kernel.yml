@@ -145,20 +145,21 @@ jobs:
           [ -f "$PATCH" ] || { echo "::error::vendored SUSFS patch missing at $PATCH"; exit 1; }
           echo "Using vendored SUSFS patch: $PATCH"
 
-          # The patch targets a specific ACK snapshot. Use git 3-way merge to adapt
-          # it to the current HEAD; needs base blobs, so deepen history first.
-          echo "Deepening common/ history for 3-way merge..."
-          git fetch --unshallow https://android.googlesource.com/kernel/common 2>/dev/null \
-            || git fetch --depth=20000 https://android.googlesource.com/kernel/common 2>/dev/null \
-            || true
-
-          if git apply --3way --whitespace=nowarn "$PATCH"; then
-            echo "SUSFS applied via git apply --3way ✓"
+          # Patch is regenerated to match current ACK 6.1.172, so direct apply works.
+          # Fall back to 3-way (deepens history) only if HEAD drifts in the future.
+          if git apply --whitespace=nowarn "$PATCH"; then
+            echo "SUSFS applied directly ✓"
           else
-            echo "::error::SUSFS 3-way merge produced conflicts."
-            git --no-pager diff --name-only --diff-filter=U || true
-            grep -rl '<<<<<<<' fs/ include/ kernel/ mm/ drivers/ 2>/dev/null | head -20 || true
-            exit 1
+            echo "Direct apply failed — trying 3-way after deepening history..."
+            git fetch --unshallow https://android.googlesource.com/kernel/common 2>/dev/null \
+              || git fetch --depth=20000 https://android.googlesource.com/kernel/common 2>/dev/null || true
+            if git apply --3way --whitespace=nowarn "$PATCH"; then
+              echo "SUSFS applied via 3-way ✓"
+            else
+              echo "::error::SUSFS patch failed. ACK HEAD likely drifted — regenerate deps/susfs patch."
+              git --no-pager diff --name-only --diff-filter=U || true
+              exit 1
+            fi
           fi
 
       - name: 🛡️ Integrate Baseband Guard (vendored)
