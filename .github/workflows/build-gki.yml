@@ -105,11 +105,6 @@ jobs:
         cp -rv ../susfs4ksu/kernel_patches/fs/* fs/
         cp -rv ../susfs4ksu/kernel_patches/include/linux/* include/linux/
 
-        # Apply the SUSFS patch. Hunk #1 of namespace.c fails on latest GKI 6.1
-        # because Google shifted lines. All other hunks apply cleanly.
-        # We use || true and fix the failing hunk via an external Python script.
-        patch -p1 --forward \
-          < "../susfs4ksu/kernel_patches/${SUSFS_PATCH}" || true
 
         # Fix Hunk #1 if it didn't apply (script is idempotent — safe to always run)
         python3 "$GITHUB_WORKSPACE/scripts/fix_susfs_namespace.py"
