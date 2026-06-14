@@ -34,14 +34,14 @@ env:
   KERNEL_VERSION: "6.1.138"
   ARCH: arm64
   SUKISU_REPO: "SukiSU-Ultra/SukiSU-Ultra"
-  SUKISU_REF: "0ca744a88835" # v4.1.3 / KSU_VERSION 40796 (main~5, avoids 40801)
+  SUKISU_REF: "v4.1.3"
   SUSFS_GITLAB: "https://gitlab.com/simonpunk/susfs4ksu.git"
   TZ: "UTC"
   HOME: "/root"
 
 jobs:
   build:
-    name: Build GKI Kernel with SukiSU 40796 + KPM
+    name: Build GKI Kernel with Kleaf
     runs-on: self-hosted
     timeout-minutes: 240
 
@@ -144,11 +144,19 @@ jobs:
           cd kernel_workspace/common
           curl -LSs "https://raw.githubusercontent.com/${{ env.SUKISU_REPO }}/main/kernel/setup.sh" -o /tmp/sukisu_setup.sh
           bash /tmp/sukisu_setup.sh "${{ env.SUKISU_REF }}"
-          # Force KSU_VERSION to count the checked-out commit, not current upstream main.
-          sed -i 's/^REPO_BRANCH[[:space:]]*:=.*/REPO_BRANCH := HEAD/' KernelSU/kernel/Kbuild
-          grep -E '^(REPO_BRANCH|VERSION_BASE|VERSION_OFFSET)' KernelSU/kernel/Kbuild
-          git -C KernelSU rev-parse --short=12 HEAD
           echo "SukiSU Ultra integrated ✓"
+
+      - name: 🔢 Fix KSU_VERSION — pin REPO_BRANCH to HEAD (tag, not main)
+        run: |
+          KBUILD="kernel_workspace/common/KernelSU/kernel/Kbuild"
+          if [ -f "$KBUILD" ]; then
+            sed -i 's/^REPO_BRANCH[[:space:]]*:=.*/REPO_BRANCH := HEAD/' "$KBUILD"
+            echo "Patched REPO_BRANCH → HEAD in $KBUILD ✓"
+            grep 'REPO_BRANCH' "$KBUILD"
+          else
+            echo "::warning::$KBUILD not found — KSU_VERSION fix skipped"
+          fi
+
 
       - name: 🕵️ Apply SUSFS v2.1+ (vendored)
         run: |
@@ -344,7 +352,7 @@ jobs:
           mv oImage Image
           rm -f patch_linux
           echo "KPM patch applied to dist/Image ✓"
-          echo "KPM patch applied to dist/Image ✓"
+
       # ─────────────────────────────────────────────────
       # 6. PACKAGE ANYKERNEL3
       # ─────────────────────────────────────────────────
@@ -455,13 +463,16 @@ jobs:
             **Kleaf target:** `${{ github.event.inputs.KLEAF_TARGET }}`
 
             ### Features
-            - SukiSU Ultra pinned to 40796 (`0ca744a88835`)
+            - SukiSU Ultra
             - SUSFS v2.1+
-            - KPM (`CONFIG_KPM=y` + patched `Image` via `patch_linux`)
-            - Baseband Guard
-            - DroidSpaces-OSS
-            - BBR + FQ
+            - KPM
+            - BBR
             - WireGuard
+            - ZRAM + ZSTD
+            - NTFS3 + ExFAT
+            - MGLRU
+            - DAMON
+            - TEO governor
 
             > GKI image. Flash on Xiaomi 14T Pro (rothko) only.
           files: |
