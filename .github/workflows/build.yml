@@ -50,7 +50,7 @@ jobs:
       uses: ./.github/actions/disk-cleanup
 
     - name: Free Disk Space
-      if: true
+      if: false
       uses: endersonmenezes/free-disk-space@v3  # Use @main for latest, @v3 for stable
       with:
         remove_android: true
@@ -256,6 +256,7 @@ jobs:
         compression-level: 9
 
     - name: 'Setup Cache and Build Environment'
+      if: false
       uses: ./.github/actions/cache-setup
       with:
         version: ${{ inputs.version }}
@@ -266,7 +267,7 @@ jobs:
     - name: Restore ccache
       id: restore-ccache
       continue-on-error: true
-      if: inputs.version == 'android12-5.10' || inputs.version == 'android13-5.10' || inputs.version == 'android13-5.15'
+      if: false
       uses: ./.github/actions/cache-restore
       with:
         cache_path: ${HOME:-/root}/.ccache
@@ -278,7 +279,7 @@ jobs:
     - name: Restore lto-cache (ccache versions)
       id: restore-lto-ccache
       continue-on-error: true
-      if: inputs.version == 'android12-5.10' || inputs.version == 'android13-5.10' || inputs.version == 'android13-5.15'
+      if: false
       uses: ./.github/actions/cache-restore
       with:
         cache_path: ${HOME:-/root}/.ld_cache
@@ -290,7 +291,7 @@ jobs:
     - name: Restore bazel-cache
       id: restore-bazel
       continue-on-error: true
-      if: inputs.version == 'android14-5.15' || inputs.version == 'android14-6.1' || inputs.version == 'android15-6.6' || inputs.version == 'android16-6.12'
+      if: false
       uses: ./.github/actions/cache-restore
       with:
         cache_path: ${HOME:-/root}/.cache/bazel
@@ -336,7 +337,7 @@ jobs:
     - name: Save ccache
       continue-on-error: true
       uses: ./.github/actions/cache-save
-      if: inputs.version == 'android12-5.10' || inputs.version == 'android13-5.10' || inputs.version == 'android13-5.15'
+      if: false
       with:
         cache_path: ${HOME:-/root}/.ccache
         cache_key: ${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ steps.extract.outputs.sublevel }}-${{ inputs.os_patch_level }}
@@ -347,7 +348,7 @@ jobs:
     - name: Save lto-cache
       continue-on-error: true
       uses: ./.github/actions/cache-save
-      if: inputs.version == 'android12-5.10' || inputs.version == 'android13-5.10' || inputs.version == 'android13-5.15'
+      if: false
       with:
         cache_path: ${HOME:-/root}/.ld_cache
         cache_key: ${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ steps.extract.outputs.sublevel }}-${{ inputs.os_patch_level }}
@@ -358,7 +359,7 @@ jobs:
     - name: Save bazel-cache
       continue-on-error: true
       uses: ./.github/actions/cache-save
-      if:  inputs.version == 'android14-5.15' || inputs.version == 'android14-6.1' || inputs.version == 'android15-6.6' || inputs.version == 'android16-6.12'
+      if: false
       with:
         cache_path: ${HOME:-/root}/.cache/bazel
         cache_key: ${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ steps.extract.outputs.sublevel }}-${{ inputs.os_patch_level }}
