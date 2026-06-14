@@ -106,50 +106,18 @@ jobs:
         cp -rv ../susfs4ksu/kernel_patches/include/linux/* include/linux/
 
         # Apply the SUSFS patch. Hunk #1 of namespace.c fails on latest GKI 6.1
-        # because Google shifted a few lines. All other hunks apply cleanly.
-        # We use || true and fix the one failing hunk with a precise Python script.
+        # because Google shifted lines. All other hunks apply cleanly.
+        # We use || true and fix the failing hunk via an external Python script.
         patch -p1 --forward \
           < "../susfs4ksu/kernel_patches/${SUSFS_PATCH}" || true
 
-        # Check if namespace.c got the SUSFS include (Hunk #1 target)
-        if ! grep -q 'CONFIG_KSU_SUSFS_SUS_MOUNT' fs/namespace.c; then
-          echo ">> Hunk #1 did not apply — injecting manually via Python"
-          python3 << 'PYEOF'
-import sys
+        # Fix Hunk #1 if it didn't apply (script is idempotent — safe to always run)
+        python3 "$GITHUB_WORKSPACE/scripts/fix_susfs_namespace.py"
 
-with open('fs/namespace.c', 'r') as f:
-    lines = f.readlines()
-
-# Inject after mnt_idmapping.h include
-anchor = next((i for i, l in enumerate(lines) if 'mnt_idmapping.h' in l), None)
-if anchor is None:
-    print("ERROR: mnt_idmapping.h not found", file=sys.stderr); sys.exit(1)
-
-block1 = ['\n', '#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n',
-          '#include <linux/susfs_def.h>\n', '#endif\n']
-lines = lines[:anchor+1] + block1 + lines[anchor+1:]
-
-# Inject after #include "internal.h"
-anchor2 = next((i for i, l in enumerate(lines) if '#include "internal.h"' in l), None)
-if anchor2 is None:
-    print("ERROR: internal.h not found", file=sys.stderr); sys.exit(1)
-
-block2 = ['\n', '#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n',
-          'extern bool susfs_is_current_ksu_domain(void);\n',
-          'extern struct static_key_true susfs_is_sdcard_android_data_not_decrypted;\n',
-          '#define CL_COPY_MNT_NS BIT(25)\n', '#endif\n']
-lines = lines[:anchor2+1] + block2 + lines[anchor2+1:]
-
-with open('fs/namespace.c', 'w') as f:
-    f.writelines(lines)
-print(">> namespace.c patched via Python successfully")
-PYEOF
-        else
-          echo ">> namespace.c already contains SUSFS — hunk applied cleanly"
-        fi
-
+        # Final verification
         grep -q 'CONFIG_KSU_SUSFS_SUS_MOUNT' fs/namespace.c || {
-          echo "::error::namespace.c still missing SUSFS after all attempts"; exit 1
+          echo "::error::namespace.c still missing SUSFS after all attempts"
+          exit 1
         }
         echo "SUSFS patch step complete"
 
