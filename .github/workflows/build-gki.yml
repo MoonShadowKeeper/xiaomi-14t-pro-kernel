@@ -142,46 +142,46 @@ jobs:
         sed -i 's/-dirty//' scripts/setlocalversion || true
 
         DEFCONFIG=arch/arm64/configs/gki_defconfig
-        cat >> "$DEFCONFIG" << 'EOF'
-
-# === Networking ===
-CONFIG_TCP_CONG_BBR=y
-CONFIG_DEFAULT_BBR=y
-CONFIG_NET_SCH_FQ=y
-CONFIG_WIREGUARD=y
-
-# === Filesystem ===
-CONFIG_TMPFS_XATTR=y
-CONFIG_TMPFS_POSIX_ACL=y
-CONFIG_NTFS3_FS=y
-CONFIG_NTFS3_FS_POSIX_ACL=y
-CONFIG_EXFAT_FS=y
-CONFIG_EXFAT_DEFAULT_IOCHARSET="utf8"
-
-# === Memory management ===
-CONFIG_LRU_GEN=y
-CONFIG_LRU_GEN_ENABLED=y
-CONFIG_LRU_GEN_STATS=y
-CONFIG_DAMON=y
-CONFIG_DAMON_VADDR=y
-CONFIG_DAMON_PADDR=y
-CONFIG_DAMON_RECLAIM=y
-
-# === Power ===
-CONFIG_CPU_IDLE_GOV_TEO=y
-CONFIG_ENERGY_MODEL=y
-CONFIG_SCHED_MC=y
-
-# === KPM / KernelSU modules ===
-CONFIG_KPM=y
-
-# === ZRAM with ZSTD ===
-CONFIG_ZSMALLOC=m
-CONFIG_ZRAM=m
-CONFIG_CRYPTO_ZSTD=y
-CONFIG_ZRAM_DEF_COMP_ZSTD=y
-CONFIG_ZRAM_DEF_COMP="zstd"
-EOF
+        {
+        printf '\n'
+        printf '# === Networking ===\n'
+        printf 'CONFIG_TCP_CONG_BBR=y\n'
+        printf 'CONFIG_DEFAULT_BBR=y\n'
+        printf 'CONFIG_NET_SCH_FQ=y\n'
+        printf 'CONFIG_WIREGUARD=y\n'
+        printf '\n'
+        printf '# === Filesystem ===\n'
+        printf 'CONFIG_TMPFS_XATTR=y\n'
+        printf 'CONFIG_TMPFS_POSIX_ACL=y\n'
+        printf 'CONFIG_NTFS3_FS=y\n'
+        printf 'CONFIG_NTFS3_FS_POSIX_ACL=y\n'
+        printf 'CONFIG_EXFAT_FS=y\n'
+        printf 'CONFIG_EXFAT_DEFAULT_IOCHARSET="utf8"\n'
+        printf '\n'
+        printf '# === Memory management ===\n'
+        printf 'CONFIG_LRU_GEN=y\n'
+        printf 'CONFIG_LRU_GEN_ENABLED=y\n'
+        printf 'CONFIG_LRU_GEN_STATS=y\n'
+        printf 'CONFIG_DAMON=y\n'
+        printf 'CONFIG_DAMON_VADDR=y\n'
+        printf 'CONFIG_DAMON_PADDR=y\n'
+        printf 'CONFIG_DAMON_RECLAIM=y\n'
+        printf '\n'
+        printf '# === Power ===\n'
+        printf 'CONFIG_CPU_IDLE_GOV_TEO=y\n'
+        printf 'CONFIG_ENERGY_MODEL=y\n'
+        printf 'CONFIG_SCHED_MC=y\n'
+        printf '\n'
+        printf '# === KPM / KernelSU modules ===\n'
+        printf 'CONFIG_KPM=y\n'
+        printf '\n'
+        printf '# === ZRAM with ZSTD ===\n'
+        printf 'CONFIG_ZSMALLOC=m\n'
+        printf 'CONFIG_ZRAM=m\n'
+        printf 'CONFIG_CRYPTO_ZSTD=y\n'
+        printf 'CONFIG_ZRAM_DEF_COMP_ZSTD=y\n'
+        printf 'CONFIG_ZRAM_DEF_COMP="zstd"\n'
+        } >> "$DEFCONFIG"
 
     - name: Build the Kernel (Kleaf / Bazel)
       env:
