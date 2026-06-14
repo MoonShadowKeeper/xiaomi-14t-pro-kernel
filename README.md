@@ -2,7 +2,7 @@
 
 <p align="center">
   <b>SukiSU Ultra · SUSFS v2.1.0 · KPM · Baseband Guard · GKI 6.1.138</b><br>
-  <sub>Custom GKI kernel for Xiaomi 14T Pro / rothko, aligned with Android 14 GKI 2025-06</sub>
+  <sub>Кастомное GKI-ядро для Xiaomi 14T Pro / rothko на базе Android 14 GKI 2025-06</sub>
 </p>
 
 <p align="center">
@@ -15,46 +15,51 @@
 
 ---
 
-## Overview
+## О проекте
 
-This kernel is built for **Xiaomi 14T Pro (`rothko`)** on top of the official Android Common Kernel GKI tree:
+Это кастомное **GKI-ядро** для **Xiaomi 14T Pro (`rothko`)**.
+
+База ядра выбрана не случайно: используется тот же Android Common Kernel таргет, на котором работают совместимые GKI-сборки для этого устройства.
 
 ```text
-Android Common Kernel: android14-6.1-2025-06
+Android Common Kernel: common-android14-6.1-2025-06
 Kernel version:        6.1.138
 Build system:          Bazel / Kleaf
 Target:                //common:kernel_aarch64_dist
+Device:                Xiaomi 14T Pro / rothko
 ```
 
-The build follows the same GKI base generation style used by WildKernels, then layers SukiSU Ultra, SUSFS, KPM, Baseband Guard, networking improvements, filesystem support, and memory-management tuning.
+Главная цель сборки — получить рабочее GKI-ядро с root-функциями, скрытием root, защитой критичных разделов, улучшенной сетью, ZRAM, поддержкой дополнительных файловых систем и современными механизмами управления памятью.
 
 ---
 
-## Core Features
+## Что добавлено в ядро
 
-| Feature | Status | Notes |
+| Фича | Статус | Что даёт |
 |---|---:|---|
-| **SukiSU Ultra** | ✅ | KernelSU-based root implementation with SukiSU features |
-| **SUSFS v2.1.0** | ✅ | Root hiding, mount hiding, uname spoofing, cmdline spoofing, open redirect |
-| **KPM** | ✅ | Kernel Plugin Module support enabled |
-| **Baseband Guard (BBG)** | ✅ | LSM-based protection for critical partitions and baseband-related paths |
-| **BBR + FQ** | ✅ | Stable TCP congestion control improvement for GKI 6.1 |
-| **WireGuard** | ✅ | Kernel-side VPN support |
-| **ZRAM + ZSTD** | ✅ | ZRAM built as GKI module, ZSTD selected as compression backend |
-| **NTFS3** | ✅ | NTFS read/write support through the in-kernel NTFS3 driver |
-| **ExFAT** | ✅ | Native ExFAT filesystem support |
-| **MGLRU** | ✅ | Multi-Generational LRU memory reclaim |
-| **DAMON** | ✅ | Data Access MONitor with reclaim and LRU sort support |
-| **TEO Governor** | ✅ | Timer Events Oriented CPU idle governor |
-| **TMPFS XATTR / POSIX ACL** | ✅ | Required for better Mountify-style tmpfs compatibility |
+| **SukiSU Ultra** | ✅ | Root на уровне ядра, форк KernelSU с дополнительными возможностями |
+| **SUSFS v2.1.0** | ✅ | Скрытие root-следов, mount points, подозрительных путей и spoof системной информации |
+| **KPM** | ✅ | Поддержка Kernel Plugin Module для расширений ядра |
+| **Baseband Guard (BBG)** | ✅ | Защита критичных разделов от опасной записи из системы |
+| **BBR + FQ** | ✅ | Улучшенный TCP congestion control для более стабильной сети |
+| **WireGuard** | ✅ | Поддержка WireGuard VPN прямо в ядре |
+| **ZRAM + ZSTD** | ✅ | Более эффективный сжатый swap в RAM |
+| **NTFS3** | ✅ | Поддержка NTFS через in-kernel драйвер |
+| **ExFAT** | ✅ | Поддержка ExFAT-накопителей |
+| **MGLRU** | ✅ | Более современный механизм освобождения памяти |
+| **DAMON** | ✅ | Мониторинг и оптимизация работы памяти |
+| **TEO Governor** | ✅ | Более современный CPU idle governor |
+| **TMPFS XATTR / POSIX ACL** | ✅ | Лучше совместимость с Mountify и tmpfs-монтированиями |
 
 ---
 
 ## SukiSU Ultra
 
-SukiSU Ultra is integrated directly into the kernel tree during the build.
+**SukiSU Ultra** — это root-решение на уровне ядра, основанное на KernelSU.
 
-Enabled root-side features:
+В отличие от классического root через boot/ramdisk, KernelSU-подход работает глубже: root-доступ контролируется ядром. Это даёт лучшую интеграцию, меньше лишних userspace-костылей и больше возможностей для продвинутых функций.
+
+Включено:
 
 ```text
 CONFIG_KSU=y
@@ -63,55 +68,87 @@ CONFIG_KALLSYMS=y
 CONFIG_KALLSYMS_ALL=y
 ```
 
-KPM support is included for plugin-based kernel extensions. The build keeps KALLSYMS enabled because KPM depends on symbol visibility.
+---
+
+## KPM
+
+**KPM (Kernel Plugin Module)** — это система плагинов для ядра.
+
+Она позволяет использовать дополнительные kernel-level расширения, которым нужен доступ к символам ядра. Поэтому вместе с KPM включены:
+
+```text
+CONFIG_KPM=y
+CONFIG_KALLSYMS=y
+CONFIG_KALLSYMS_ALL=y
+```
+
+Если коротко: KPM нужен для более продвинутых модулей SukiSU Ultra.
 
 ---
 
 ## SUSFS v2.1.0
 
-SUSFS is vendored locally under `deps/susfs/` and applied during the build. The included version reports:
+**SUSFS** — это набор патчей для скрытия root-следов и подмены части системной информации.
+
+Версия в сборке:
 
 ```c
 #define SUSFS_VERSION "v2.1.0"
 ```
 
-Enabled SUSFS features:
+Что включено:
 
-| SUSFS feature | Config |
+| Возможность | Что делает |
 |---|---|
-| SUSFS core | `CONFIG_KSU_SUSFS=y` |
-| Hide suspicious paths | `CONFIG_KSU_SUSFS_SUS_PATH=y` |
-| Hide mount points | `CONFIG_KSU_SUSFS_SUS_MOUNT=y` |
-| Spoof kernel stat data | `CONFIG_KSU_SUSFS_SUS_KSTAT=y` |
-| Memory mapping protection | `CONFIG_KSU_SUSFS_SUS_MAP=y` |
-| Spoof uname output | `CONFIG_KSU_SUSFS_SPOOF_UNAME=y` |
-| Spoof cmdline / bootconfig | `CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y` |
-| Redirect file opens | `CONFIG_KSU_SUSFS_OPEN_REDIRECT=y` |
-| SUSFS logging | `CONFIG_KSU_SUSFS_ENABLE_LOG=y` |
-| Hide KSU/SUSFS symbols | `CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y` |
+| **SUS_PATH** | Скрывает подозрительные пути, по которым приложения могут искать root |
+| **SUS_MOUNT** | Скрывает mount points, связанные с root/модулями |
+| **SUS_KSTAT** | Подменяет kernel stat-информацию |
+| **SUS_MAP** | Защищает и скрывает подозрительные memory mappings |
+| **SPOOF_UNAME** | Подменяет данные, которые возвращает `uname` |
+| **SPOOF_CMDLINE** | Подменяет boot cmdline / bootconfig |
+| **OPEN_REDIRECT** | Позволяет перенаправлять обращения к файлам |
+| **HIDE_SYMBOLS** | Скрывает символы KSU/SUSFS в ядре |
+| **ENABLE_LOG** | Включает логирование SUSFS |
 
-SUSFS is applied from a local copy, so the workflow does not depend on the external SUSFS repository at build time.
+Конфиги:
+
+```text
+CONFIG_KSU_SUSFS=y
+CONFIG_KSU_SUSFS_SUS_PATH=y
+CONFIG_KSU_SUSFS_SUS_MOUNT=y
+CONFIG_KSU_SUSFS_SUS_KSTAT=y
+CONFIG_KSU_SUSFS_SUS_MAP=y
+CONFIG_KSU_SUSFS_SPOOF_UNAME=y
+CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
+CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+CONFIG_KSU_SUSFS_ENABLE_LOG=y
+CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
+```
+
+SUSFS хранится локально в репозитории (`deps/susfs`), чтобы сборка не зависела от внешнего репозитория во время билда.
 
 ---
 
-## Baseband Guard
+## Baseband Guard (BBG)
 
-Baseband Guard is included from the vendored `deps/baseband-guard/` tree.
+**Baseband Guard** — это LSM-модуль, который защищает важные разделы устройства от опасной записи.
 
-Enabled config:
+Главная идея: не дать вредоносному скрипту, модулю или приложению случайно или намеренно повредить критичные разделы, связанные с boot/baseband/прошивкой.
+
+Включено:
 
 ```text
 CONFIG_BBG=y
 CONFIG_LSM="landlock,lockdown,yama,loadpin,safesetid,integrity,selinux,smack,tomoyo,apparmor,bpf,baseband_guard"
 ```
 
-BBG is wired as a Linux Security Module and added to `CONFIG_LSM`, which is required for it to load correctly on modern GKI kernels.
+`baseband_guard` добавлен в `CONFIG_LSM`, потому что без этого BBG не активируется как полноценный Linux Security Module.
 
 ---
 
-## Networking
+## Сеть
 
-The networking stack keeps the stable GKI 6.1 path:
+В ядре включены стабильные сетевые улучшения:
 
 ```text
 CONFIG_TCP_CONG_BBR=y
@@ -120,29 +157,75 @@ CONFIG_DEFAULT_TCP_CONG="bbr"
 CONFIG_WIREGUARD=y
 ```
 
-BBRv3 is intentionally not included. It is not part of the stock 6.1 GKI tree and would require extra patching with higher conflict risk. Standard BBR + FQ is the safer choice here.
+### BBR + FQ
+
+**BBR** — TCP congestion control от Google. Он помогает сети держать более стабильную скорость и задержку, особенно на мобильных сетях и Wi‑Fi.
+
+**FQ** нужен как qdisc, с которым BBR работает корректнее.
+
+### WireGuard
+
+**WireGuard** — современный VPN-протокол. Поддержка в ядре обычно быстрее и чище, чем userspace-реализация.
+
+BBRv3 намеренно не добавлен: он не входит в стандартное GKI 6.1 и требует дополнительных патчей с высоким риском конфликтов.
 
 ---
 
-## Memory and Storage
+## Память и производительность
 
-Memory-management changes:
+### ZRAM + ZSTD
 
 ```text
 CONFIG_ZRAM=m
 CONFIG_ZRAM_DEF_COMP_ZSTD=y
 CONFIG_ZRAM_DEF_COMP="zstd"
 CONFIG_ZSMALLOC=m
+```
+
+**ZRAM** создаёт сжатый swap в оперативной памяти. Это помогает системе дольше держать приложения в памяти и меньше упираться в нехватку RAM.
+
+**ZSTD** — быстрый и эффективный алгоритм сжатия. Обычно даёт хороший баланс скорости и степени сжатия.
+
+ZRAM и ZSMALLOC оставлены модулями (`=m`), потому что GKI ожидает `zram.ko` и `zsmalloc.ko` как отдельные модули.
+
+### MGLRU
+
+```text
 CONFIG_LRU_GEN=y
 CONFIG_LRU_GEN_ENABLED=y
 CONFIG_LRU_GEN_STATS=y
+```
+
+**MGLRU (Multi-Generational LRU)** — более современный алгоритм управления памятью. Он помогает ядру умнее решать, какие страницы памяти выгружать первыми.
+
+На практике это может дать более плавную многозадачность и меньше агрессивных выгрузок приложений.
+
+### DAMON
+
+```text
 CONFIG_DAMON=y
+CONFIG_DAMON_VADDR=y
+CONFIG_DAMON_PADDR=y
+CONFIG_DAMON_SYSFS=y
 CONFIG_DAMON_RECLAIM=y
 CONFIG_DAMON_LRU_SORT=y
+```
+
+**DAMON (Data Access MONitor)** отслеживает, как реально используется память, и помогает ядру принимать более точные решения по reclaim/LRU.
+
+В сборке включены DAMON reclaim и DAMON LRU sort.
+
+### TEO Governor
+
+```text
 CONFIG_CPU_IDLE_GOV_TEO=y
 ```
 
-Filesystem changes:
+**TEO Governor** — CPU idle governor, который помогает процессору эффективнее уходить в idle-состояния. Это может положительно влиять на энергопотребление без грубого вмешательства в частоты.
+
+---
+
+## Файловые системы
 
 ```text
 CONFIG_NTFS3_FS=y
@@ -153,41 +236,53 @@ CONFIG_TMPFS_XATTR=y
 CONFIG_TMPFS_POSIX_ACL=y
 ```
 
-ZRAM and ZSMALLOC are kept as modules because the GKI module list expects `zram.ko` and `zsmalloc.ko` to exist.
+### NTFS3
+
+**NTFS3** — in-kernel драйвер NTFS. Нужен для нормальной работы с NTFS-накопителями без FUSE-костылей.
+
+### ExFAT
+
+**ExFAT** нужен для флешек, карт памяти и внешних накопителей, которые часто форматируются именно в ExFAT.
+
+### TMPFS XATTR / POSIX ACL
+
+Эти опции улучшают совместимость tmpfs-монтирований, в том числе для сценариев вроде Mountify.
 
 ---
 
-## WildKernels Alignment
+## Совместимость с WildKernels GKI
 
-The workflow follows the same compatibility pattern used by WildKernels GKI builds:
+Сборка выровнена по рабочему подходу WildKernels для GKI:
 
-- pinned ACK branch: `common-android14-6.1-2025-06`
+- база: `common-android14-6.1-2025-06`
 - kernel sublevel: `6.1.138`
-- clean dirty flags for a stable release string
-- remove protected exports for vendor-module compatibility
-- use Bazel/Kleaf with `--config=fast` and `--config=stamp`
-- package with WildKernels AnyKernel3 `gki-2.0`
+- сборка через Bazel/Kleaf
+- `--config=fast`
+- `--config=stamp`
+- clean dirty flags, чтобы не получить `-maybe-dirty` в версии ядра
+- remove protected exports для совместимости с vendor-модулями
+- упаковка через WildKernels AnyKernel3 `gki-2.0`
 
-This keeps the kernel close to the known-working GKI base while still adding SukiSU Ultra, SUSFS, KPM, BBG, and the selected tuning.
+Это важно: vendor-модули на устройстве чувствительны к версии ядра и vermagic. Поэтому сборка держится на 6.1.138/2025-06, а не на плавающем HEAD.
 
 ---
 
-## Build Artifacts
+## Артефакты сборки
 
-The workflow produces separate artifacts:
+Workflow выгружает два основных артефакта:
 
-| Artifact | Contents |
+| Артефакт | Что внутри |
 |---|---|
-| `AnyKernel3-Xiaomi14TPro-GKI6.1.138-*` | Flashable AnyKernel3 package contents |
-| `boot-images-*` | `boot.img`, `boot-lz4.img`, `boot-gz.img`, raw `Image`, build log |
+| `AnyKernel3-Xiaomi14TPro-GKI6.1.138-*` | Готовый flashable AnyKernel3-пакет |
+| `boot-images-*` | `boot.img`, `boot-lz4.img`, `boot-gz.img`, raw `Image`, `build.log` |
 
-The AnyKernel3 artifact is uploaded as a direct flashable package, not as a zip nested inside another zip.
+AnyKernel3 выгружается без вложенного zip-архива, чтобы его было удобнее скачивать и прошивать.
 
 ---
 
 ## Credits
 
-- Android Common Kernel, Google
+- Google Android Common Kernel
 - SukiSU Ultra
 - SUSFS by simonpunk
 - Baseband Guard by vc-teahouse
