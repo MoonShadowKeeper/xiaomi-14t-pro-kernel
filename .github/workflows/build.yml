@@ -179,7 +179,6 @@ jobs:
       uses: ./.github/actions/set-kernel-config
       with:
         config_list: |
-          CONFIG_RFKILL=m
           CONFIG_ZSMALLOC=m
           CONFIG_ZRAM=m
           CONFIG_ZSTD_COMPRESS=y
