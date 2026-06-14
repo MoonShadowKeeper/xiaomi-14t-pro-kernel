@@ -145,21 +145,14 @@ jobs:
           [ -f "$PATCH" ] || { echo "::error::vendored SUSFS patch missing at $PATCH"; exit 1; }
           echo "Using vendored SUSFS patch: $PATCH"
 
-          # Patch is regenerated to match current ACK 6.1.172, so direct apply works.
-          # Fall back to 3-way (deepens history) only if HEAD drifts in the future.
-          if git apply --whitespace=nowarn "$PATCH"; then
-            echo "SUSFS applied directly ✓"
+          # Apply with patch(1) using fuzz so minor context/line-number drift at
+          # the current ACK HEAD is tolerated (no slow git history fetch needed).
+          if patch -p1 --no-backup-if-mismatch --fuzz=3 < "$PATCH"; then
+            echo "SUSFS applied via patch --fuzz=3 ✓"
           else
-            echo "Direct apply failed — trying 3-way after deepening history..."
-            git fetch --unshallow https://android.googlesource.com/kernel/common 2>/dev/null \
-              || git fetch --depth=20000 https://android.googlesource.com/kernel/common 2>/dev/null || true
-            if git apply --3way --whitespace=nowarn "$PATCH"; then
-              echo "SUSFS applied via 3-way ✓"
-            else
-              echo "::error::SUSFS patch failed. ACK HEAD likely drifted — regenerate deps/susfs patch."
-              git --no-pager diff --name-only --diff-filter=U || true
-              exit 1
-            fi
+            echo "::error::SUSFS patch failed even with fuzz. Check .rej files below."
+            find . -name '*.rej' -exec echo '--- {} ---' \; -exec cat {} \; 2>/dev/null | head -120
+            exit 1
           fi
 
       - name: 🛡️ Integrate Baseband Guard (vendored)
