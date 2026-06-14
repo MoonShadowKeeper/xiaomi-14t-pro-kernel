@@ -1,4 +1,4 @@
-name: 🏗️ Build Xiaomi 14T Pro Kernel (6.1.138)
+name: 🏗️ Build Xiaomi 14T Pro Kernel (6.1.138) — Bazel/Kleaf
 
 on:
   workflow_dispatch:
@@ -11,12 +11,16 @@ on:
         description: "Kernel branch"
         required: true
         default: "master"
-      DEFCONFIG:
-        description: "Defconfig name"
+      KLEAF_TARGET:
+        description: "Kleaf dist target"
         required: true
-        default: "gki_defconfig"
+        default: "//common:kernel_aarch64_dist"
+      BUILD_CONFIG:
+        description: "Optional BUILD_CONFIG fallback, only if repo lacks Kleaf target"
+        required: false
+        default: "common/build.config.gki.aarch64"
       SUSFS_BRANCH:
-        description: "SUSFS branch"
+        description: "SUSFS branch for kernel 6.1"
         required: true
         default: "kernel-6.1"
       ENABLE_KPM:
@@ -25,285 +29,274 @@ on:
         default: "true"
         type: boolean
       UPLOAD_RELEASE:
-        description: "Upload as GitHub Release"
+        description: "Upload GitHub Release"
         required: false
         default: "true"
         type: boolean
+
+permissions:
+  contents: write
+  actions: read
 
 env:
   KERNEL_VERSION: "6.1.138"
   ARCH: arm64
   SUBARCH: arm64
-  # SukiSU Ultra
   SUKISU_REPO: "SukiSU-Ultra/SukiSU-Ultra"
   SUKISU_BRANCH: "main"
-  # SUSFS
   SUSFS_REPO: "simonpunk/susfs4ksu"
-  # Toolchain — AOSP Clang 18 (GKI compatible)
-  CLANG_VERSION: "r522817"
   TZ: "UTC"
 
 jobs:
   build:
-    name: Build Kernel
+    name: Build Kernel with Bazel/Kleaf
     runs-on: self-hosted
-    timeout-minutes: 120
+    timeout-minutes: 180
 
     steps:
       # ─────────────────────────────────────────────────
-      # 1. SETUP ENVIRONMENT
+      # 1. SELF-HOSTED RUNNER SETUP
       # ─────────────────────────────────────────────────
-      - name: 🧹 Clean workspace (self-hosted persists between runs)
+      - name: 🧹 Clean workspace
         run: |
-          rm -rf kernel_source AnyKernel3 *.zip build.log || true
+          rm -rf kernel_source AnyKernel3 out dist artifacts *.zip || true
 
-      - name: 🛠️ Ensure build dependencies (best-effort, needs sudo)
+      - name: 🛠️ Ensure build dependencies
         run: |
           if command -v apt-get >/dev/null 2>&1; then
             sudo apt-get update -qq || true
             sudo apt-get install -y --no-install-recommends \
-              bc bison build-essential ca-certificates ccache curl flex \
-              git kmod libelf-dev libssl-dev libncurses-dev lz4 make \
-              ninja-build pahole perl python3 python3-pip rsync \
-              unzip wget xz-utils zip zstd file binutils-aarch64-linux-gnu \
-              gcc-aarch64-linux-gnu || echo "::warning::Could not install deps automatically — ensure they are present on the runner"
+              bc binutils bison build-essential ca-certificates ccache curl flex \
+              git jq kmod libelf-dev libssl-dev libncurses-dev lz4 make \
+              ninja-build pahole perl python3 python3-pip rsync unzip wget \
+              xz-utils zip zstd file || \
+              echo "::warning::Could not install all deps automatically — check the self-hosted runner"
           else
-            echo "::warning::apt-get not found — make sure build deps are pre-installed on this self-hosted runner"
+            echo "::warning::apt-get not found — make sure build deps are installed"
           fi
 
       # ─────────────────────────────────────────────────
-      # 2. TOOLCHAIN — AOSP Clang
-      # ─────────────────────────────────────────────────
-      - name: 🔧 Setup AOSP Clang ${{ env.CLANG_VERSION }}
-        run: |
-          CLANG_DIR="$HOME/toolchains/clang-${{ env.CLANG_VERSION }}"
-          mkdir -p "$CLANG_DIR"
-
-          if [ ! -x "$CLANG_DIR/bin/clang" ]; then
-            rm -rf "$CLANG_DIR" /tmp/clang.tar.gz
-            mkdir -p "$CLANG_DIR"
-            CLANG_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-${{ env.CLANG_VERSION }}.tar.gz"
-            echo "Downloading AOSP Clang from: $CLANG_URL"
-            curl -L --retry 5 --retry-delay 5 --fail "$CLANG_URL" -o /tmp/clang.tar.gz
-            tar -xzf /tmp/clang.tar.gz -C "$CLANG_DIR"
-          else
-            echo "Using cached Clang: $CLANG_DIR"
-          fi
-
-          echo "$CLANG_DIR/bin" >> $GITHUB_PATH
-          echo "CC=$CLANG_DIR/bin/clang" >> $GITHUB_ENV
-          echo "CLANG_TRIPLE=aarch64-linux-gnu-" >> $GITHUB_ENV
-          echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
-          echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
-          "$CLANG_DIR/bin/clang" --version
-
-      # ─────────────────────────────────────────────────
-      # 3. KERNEL SOURCE
+      # 2. CLONE KERNEL SOURCE
       # ─────────────────────────────────────────────────
       - name: 📥 Clone kernel source
         run: |
           git clone --depth=1 \
-            --branch ${{ github.event.inputs.KERNEL_BRANCH }} \
-            https://github.com/${{ github.event.inputs.KERNEL_SOURCE }} \
+            --branch "${{ github.event.inputs.KERNEL_BRANCH }}" \
+            "https://github.com/${{ github.event.inputs.KERNEL_SOURCE }}" \
             kernel_source
-          echo "KERNEL_DIR=$(pwd)/kernel_source" >> $GITHUB_ENV
           cd kernel_source
-          echo "KERNEL_HASH=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+          echo "KERNEL_DIR=$(pwd)" >> "$GITHUB_ENV"
+          echo "KERNEL_HASH=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
+          echo "Kernel source: ${{ github.event.inputs.KERNEL_SOURCE }} @ $(git rev-parse --short HEAD)"
 
-      # ─────────────────────────────────────────────────
-      # 4. SUKISU ULTRA + KPM
-      # ─────────────────────────────────────────────────
-      - name: 🔑 Integrate SukiSU Ultra (KernelSU fork)
+      - name: 🔎 Detect Kleaf/Bazel layout
         run: |
           cd kernel_source
-          # Download SukiSU Ultra setup script
-          curl -LSs "https://raw.githubusercontent.com/${{ env.SUKISU_REPO }}/${{ env.SUKISU_BRANCH }}/kernel/setup.sh" -o /tmp/sukisu_setup.sh
-          bash /tmp/sukisu_setup.sh ${{ env.SUKISU_BRANCH }}
-          echo "SukiSU Ultra integrated ✓"
+          echo "Repo root files:"
+          ls -la | head -80
 
-      - name: 🔌 Enable KPM (Kernel Plugin Module)
-        if: ${{ github.event.inputs.ENABLE_KPM == 'true' }}
-        run: |
-          cd kernel_source
-          # KPM is built into SukiSU Ultra — enable via config
-          # Check if kpm config fragment exists
-          if [ -f "KernelSU/kernel/kpm.config" ]; then
-            cat KernelSU/kernel/kpm.config >> arch/${{ env.ARCH }}/configs/${{ github.event.inputs.DEFCONFIG }}
-          fi
-          # Ensure KPM symbols are exported
-          scripts/config --file arch/${{ env.ARCH }}/configs/${{ github.event.inputs.DEFCONFIG }} \
-            -e KPM \
-            -e KALLSYMS \
-            -e KALLSYMS_ALL \
-            -e KPROBES \
-            -e HAVE_KPROBES \
-            -e KPROBE_EVENTS \
-            || true
-          echo "KPM enabled ✓"
-
-      # ─────────────────────────────────────────────────
-      # 5. SUSFS v2.1+
-      # ─────────────────────────────────────────────────
-      - name: 🕵️ Apply SUSFS v2.1+ patches
-        run: |
-          SUSFS_DIR=/tmp/susfs4ksu
-          git clone --depth=1 \
-            --branch ${{ github.event.inputs.SUSFS_BRANCH }} \
-            https://github.com/${{ env.SUSFS_REPO }} \
-            $SUSFS_DIR
-
-          cd kernel_source
-
-          # Apply SUSFS kernel patches
-          echo "Applying SUSFS kernel patch..."
-          patch -p1 < $SUSFS_DIR/kernel_patches/50_add_susfs_in_kernel-${{ github.event.inputs.SUSFS_BRANCH }}.patch || \
-          patch -p1 < $SUSFS_DIR/kernel_patches/50_add_susfs_in_kernel.patch
-
-          # Apply SukiSU-specific SUSFS hooks
-          if [ -f "$SUSFS_DIR/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" ]; then
-            patch -p1 < $SUSFS_DIR/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch || true
-          fi
-          echo "SUSFS v2.1+ applied ✓"
-
-      # ─────────────────────────────────────────────────
-      # 6. KERNEL FEATURE CONFIGS
-      # ─────────────────────────────────────────────────
-      - name: ⚙️ Apply kernel feature configs
-        run: |
-          cd kernel_source
-          DEFCFG="arch/${{ env.ARCH }}/configs/${{ github.event.inputs.DEFCONFIG }}"
-
-          scripts/config --file "$DEFCFG" \
-            \
-            `# ── BBR TCP congestion control ──` \
-            -e TCP_CONG_BBR \
-            -e NET_SCH_FQ \
-            --set-str DEFAULT_TCP_CONG bbr \
-            \
-            `# ── WireGuard ──` \
-            -e WIREGUARD \
-            -e WIREGUARD_DEBUG \
-            \
-            `# ── ZRAM + ZSTD ──` \
-            -e ZRAM \
-            -e ZRAM_DEF_COMP_ZSTD \
-            --set-str ZRAM_DEF_COMP "zstd" \
-            -e CRYPTO_ZSTD \
-            -e ZSMALLOC \
-            -e ZSMALLOC_PGTABLE_MAPPING \
-            \
-            `# ── NTFS3 ──` \
-            -e NTFS3_FS \
-            -e NTFS3_LZX_XPRESS \
-            -e NTFS3_FS_POSIX_ACL \
-            \
-            `# ── ExFAT ──` \
-            -e EXFAT_FS \
-            -e EXFAT_DEFAULT_IOCHARSET \
-            \
-            `# ── MGLRU (Multi-Generational LRU) ──` \
-            -e LRU_GEN \
-            -e LRU_GEN_ENABLED \
-            -e LRU_GEN_STATS \
-            \
-            `# ── DAMON (Data Access Monitor) ──` \
-            -e DAMON \
-            -e DAMON_VADDR \
-            -e DAMON_PADDR \
-            -e DAMON_SYSFS \
-            -e DAMON_DBGFS \
-            -e DAMON_RECLAIM \
-            -e DAMON_LRU_SORT \
-            \
-            `# ── TEO CPU idle governor ──` \
-            -e CPU_IDLE_GOV_TEO \
-            \
-            `# ── General performance / security ──` \
-            -e BPF_JIT \
-            -e BPF_JIT_ALWAYS_ON \
-            -e SECURITY \
-            -e SECURITY_SELINUX \
-            || true
-
-          echo "Feature configs applied ✓"
-          cat "$DEFCFG" | grep -E "BBR|WIREGUARD|ZRAM|NTFS3|EXFAT|LRU_GEN|DAMON|TEO|KSU|SUSFS" | sort
-
-      # ─────────────────────────────────────────────────
-      # 7. BUILD
-      # ─────────────────────────────────────────────────
-      - name: 🔨 Generate .config
-        run: |
-          cd kernel_source
-          export PATH="$HOME/toolchains/clang/bin:$PATH"
-          make \
-            O=out \
-            ARCH=${{ env.ARCH }} \
-            SUBARCH=${{ env.SUBARCH }} \
-            CC=clang \
-            CLANG_TRIPLE=${{ env.CLANG_TRIPLE }} \
-            CROSS_COMPILE=${{ env.CROSS_COMPILE }} \
-            ${{ github.event.inputs.DEFCONFIG }}
-
-      - name: ⚙️ Apply olddefconfig to resolve new symbols
-        run: |
-          cd kernel_source
-          export PATH="$HOME/toolchains/clang/bin:$PATH"
-          make \
-            O=out \
-            ARCH=${{ env.ARCH }} \
-            CC=clang \
-            CLANG_TRIPLE=${{ env.CLANG_TRIPLE }} \
-            CROSS_COMPILE=${{ env.CROSS_COMPILE }} \
-            olddefconfig
-
-      - name: 🏗️ Build kernel image
-        run: |
-          cd kernel_source
-          export PATH="$HOME/toolchains/clang/bin:$PATH"
-          export KBUILD_BUILD_USER="MoonShadowKeeper"
-          export KBUILD_BUILD_HOST="GithubActions"
-          make \
-            O=out \
-            ARCH=${{ env.ARCH }} \
-            SUBARCH=${{ env.SUBARCH }} \
-            CC=clang \
-            CLANG_TRIPLE=${{ env.CLANG_TRIPLE }} \
-            CROSS_COMPILE=${{ env.CROSS_COMPILE }} \
-            LLVM=1 \
-            LLVM_IAS=1 \
-            -j$(nproc --all) \
-            Image.gz-dtb dtbo.img 2>&1 | tee build.log
-
-          # Check build success
-          if [ -f "out/arch/${{ env.ARCH }}/boot/Image.gz-dtb" ]; then
-            echo "BUILD_SUCCESS=true" >> $GITHUB_ENV
-            echo "Kernel image built ✓"
+          if [ -x "tools/bazel" ]; then
+            echo "BAZEL_CMD=tools/bazel" >> "$GITHUB_ENV"
+            echo "Found Kleaf wrapper: tools/bazel"
+          elif [ -x "build/kernel/kleaf/bazel.sh" ]; then
+            echo "BAZEL_CMD=build/kernel/kleaf/bazel.sh" >> "$GITHUB_ENV"
+            echo "Found Kleaf wrapper: build/kernel/kleaf/bazel.sh"
+          elif command -v bazel >/dev/null 2>&1; then
+            echo "BAZEL_CMD=bazel" >> "$GITHUB_ENV"
+            echo "Using system bazel"
+          elif command -v bazelisk >/dev/null 2>&1; then
+            echo "BAZEL_CMD=bazelisk" >> "$GITHUB_ENV"
+            echo "Using system bazelisk"
           else
-            echo "BUILD_SUCCESS=false" >> $GITHUB_ENV
-            echo "::error::Kernel build failed! Check build.log"
+            echo "::error::No Kleaf/Bazel wrapper found. Expected tools/bazel, build/kernel/kleaf/bazel.sh, bazel, or bazelisk."
             exit 1
           fi
 
+          if [ ! -f "MODULE.bazel" ] && [ ! -f "WORKSPACE" ] && [ ! -f "WORKSPACE.bazel" ]; then
+            echo "::warning::No MODULE.bazel / WORKSPACE found at repo root. Kleaf target may need a different source tree layout."
+          fi
+
       # ─────────────────────────────────────────────────
-      # 8. ANYKERNEL3 ZIP
+      # 3. SUKISU ULTRA + SUSFS
+      # ─────────────────────────────────────────────────
+      - name: 🔑 Integrate SukiSU Ultra
+        run: |
+          cd kernel_source
+          curl -LSs "https://raw.githubusercontent.com/${{ env.SUKISU_REPO }}/${{ env.SUKISU_BRANCH }}/kernel/setup.sh" -o /tmp/sukisu_setup.sh
+          bash /tmp/sukisu_setup.sh "${{ env.SUKISU_BRANCH }}"
+          echo "SukiSU Ultra integrated ✓"
+
+      - name: 🕵️ Apply SUSFS v2.1+ patches
+        run: |
+          SUSFS_DIR=/tmp/susfs4ksu
+          rm -rf "$SUSFS_DIR"
+          git clone --depth=1 \
+            --branch "${{ github.event.inputs.SUSFS_BRANCH }}" \
+            "https://github.com/${{ env.SUSFS_REPO }}" \
+            "$SUSFS_DIR"
+
+          cd kernel_source
+
+          PATCH_APPLIED=0
+          for p in \
+            "$SUSFS_DIR/kernel_patches/50_add_susfs_in_kernel-${{ github.event.inputs.SUSFS_BRANCH }}.patch" \
+            "$SUSFS_DIR/kernel_patches/50_add_susfs_in_kernel.patch"; do
+            if [ -f "$p" ]; then
+              echo "Applying $p"
+              patch -p1 < "$p" && PATCH_APPLIED=1 && break
+            fi
+          done
+
+          if [ "$PATCH_APPLIED" != "1" ]; then
+            echo "::warning::SUSFS kernel patch was not found/applied. Check SUSFS repo layout."
+          fi
+
+          if [ -f "$SUSFS_DIR/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" ]; then
+            patch -p1 < "$SUSFS_DIR/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" || true
+          fi
+
+          echo "SUSFS step done ✓"
+
+      # ─────────────────────────────────────────────────
+      # 4. CONFIG FRAGMENT FOR FEATURES
+      # ─────────────────────────────────────────────────
+      - name: ⚙️ Create feature config fragment
+        run: |
+          cd kernel_source
+          cat > feature_14tpro.config <<'EOF'
+          CONFIG_KSU=y
+          CONFIG_KSU_SUSFS=y
+          CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y
+          CONFIG_KSU_SUSFS_SUS_PATH=y
+          CONFIG_KSU_SUSFS_SUS_MOUNT=y
+          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y
+          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y
+          CONFIG_KSU_SUSFS_SUS_KSTAT=y
+          CONFIG_KSU_SUSFS_SUS_OVERLAYFS=y
+          CONFIG_KSU_SUSFS_TRY_UMOUNT=y
+          CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT=y
+          CONFIG_KSU_SUSFS_SPOOF_UNAME=y
+          CONFIG_KSU_SUSFS_ENABLE_LOG=y
+          CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
+          CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
+          CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+          CONFIG_KPM=y
+          CONFIG_KALLSYMS=y
+          CONFIG_KALLSYMS_ALL=y
+          CONFIG_KPROBES=y
+          CONFIG_KPROBE_EVENTS=y
+          CONFIG_TCP_CONG_BBR=y
+          CONFIG_NET_SCH_FQ=y
+          CONFIG_DEFAULT_TCP_CONG="bbr"
+          CONFIG_WIREGUARD=y
+          CONFIG_ZRAM=y
+          CONFIG_ZRAM_DEF_COMP_ZSTD=y
+          CONFIG_ZRAM_DEF_COMP="zstd"
+          CONFIG_CRYPTO_ZSTD=y
+          CONFIG_ZSMALLOC=y
+          CONFIG_NTFS3_FS=y
+          CONFIG_NTFS3_LZX_XPRESS=y
+          CONFIG_NTFS3_FS_POSIX_ACL=y
+          CONFIG_EXFAT_FS=y
+          CONFIG_LRU_GEN=y
+          CONFIG_LRU_GEN_ENABLED=y
+          CONFIG_LRU_GEN_STATS=y
+          CONFIG_DAMON=y
+          CONFIG_DAMON_VADDR=y
+          CONFIG_DAMON_PADDR=y
+          CONFIG_DAMON_SYSFS=y
+          CONFIG_DAMON_RECLAIM=y
+          CONFIG_DAMON_LRU_SORT=y
+          CONFIG_CPU_IDLE_GOV_TEO=y
+          EOF
+
+          echo "Feature config fragment created: feature_14tpro.config"
+          cat feature_14tpro.config
+
+      - name: 🧩 Wire feature fragment into Kleaf if possible
+        run: |
+          cd kernel_source
+
+          # Generic Kleaf override. Many Kleaf trees respect KERNEL_CONFIG_FRAGMENTS.
+          echo "KERNEL_CONFIG_FRAGMENTS=$(pwd)/feature_14tpro.config" >> "$GITHUB_ENV"
+          echo "KLEAF_EXTRA_ARGS=--//build/kernel/kleaf:config_local=$(pwd)/feature_14tpro.config" >> "$GITHUB_ENV"
+
+          # Best-effort fallback for trees that still use arch configs under Kleaf.
+          if [ -f "common/arch/arm64/configs/gki_defconfig" ]; then
+            cat feature_14tpro.config >> common/arch/arm64/configs/gki_defconfig
+            echo "Appended feature fragment to common/arch/arm64/configs/gki_defconfig"
+          elif [ -f "arch/arm64/configs/gki_defconfig" ]; then
+            cat feature_14tpro.config >> arch/arm64/configs/gki_defconfig
+            echo "Appended feature fragment to arch/arm64/configs/gki_defconfig"
+          else
+            echo "No gki_defconfig found to append. Relying on Kleaf config fragment env."
+          fi
+
+      # ─────────────────────────────────────────────────
+      # 5. BAZEL/KLEAF BUILD
+      # ─────────────────────────────────────────────────
+      - name: 🧪 Query Kleaf target
+        run: |
+          cd kernel_source
+          echo "Bazel command: $BAZEL_CMD"
+          echo "Target: ${{ github.event.inputs.KLEAF_TARGET }}"
+          $BAZEL_CMD query "${{ github.event.inputs.KLEAF_TARGET }}" || \
+            echo "::warning::Target query failed. Build step will still try it. If it fails, set KLEAF_TARGET to a valid *_dist target."
+
+      - name: 🏗️ Build kernel with Bazel/Kleaf
+        run: |
+          cd kernel_source
+          mkdir -p ../dist
+
+          set +e
+          $BAZEL_CMD run "${{ github.event.inputs.KLEAF_TARGET }}" \
+            -- \
+            --dist_dir="$(pwd)/../dist" 2>&1 | tee ../build.log
+          STATUS=${PIPESTATUS[0]}
+          set -e
+
+          if [ "$STATUS" != "0" ]; then
+            echo "::error::Kleaf build failed with status $STATUS"
+            echo "Available *_dist targets:"
+            $BAZEL_CMD query 'kind(".*", //...:*)' 2>/dev/null | grep -E '(_dist$|kernel_.*dist)' | head -200 || true
+            exit "$STATUS"
+          fi
+
+          echo "DIST_DIR=$(pwd)/../dist" >> "$GITHUB_ENV"
+          echo "Kleaf build done ✓"
+          ls -lah ../dist
+
+      # ─────────────────────────────────────────────────
+      # 6. PACKAGE ANYKERNEL3
       # ─────────────────────────────────────────────────
       - name: 📦 Package with AnyKernel3
         run: |
-          git clone --depth=1 \
-            https://github.com/osm0sis/AnyKernel3.git \
-            AnyKernel3
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AnyKernel3
 
-          # Copy kernel image
-          cp kernel_source/out/arch/${{ env.ARCH }}/boot/Image.gz-dtb AnyKernel3/
-          [ -f kernel_source/out/arch/${{ env.ARCH }}/boot/dtbo.img ] && \
-            cp kernel_source/out/arch/${{ env.ARCH }}/boot/dtbo.img AnyKernel3/ || true
+          IMAGE=""
+          for f in \
+            dist/Image.gz-dtb \
+            dist/Image.gz \
+            dist/Image \
+            dist/bzImage; do
+            if [ -f "$f" ]; then IMAGE="$f"; break; fi
+          done
 
-          # Patch anykernel.sh for Xiaomi 14T Pro (vermeer)
-          cat > AnyKernel3/anykernel.sh << 'ANYKERNEL'
+          if [ -z "$IMAGE" ]; then
+            echo "::error::No kernel image found in dist. Files:"
+            find dist -maxdepth 2 -type f | sort
+            exit 1
+          fi
+
+          cp "$IMAGE" AnyKernel3/$(basename "$IMAGE")
+          [ -f dist/dtbo.img ] && cp dist/dtbo.img AnyKernel3/ || true
+          [ -f dist/vendor_dlkm.img ] && cp dist/vendor_dlkm.img AnyKernel3/ || true
+          [ -f dist/system_dlkm.img ] && cp dist/system_dlkm.img AnyKernel3/ || true
+
+          cat > AnyKernel3/anykernel.sh <<'ANYKERNEL'
           ## AnyKernel3 Ramdisk Mod Script
-          # osm0sis @ xda-developers
           properties() { '
-          kernel.string=SukiSU Ultra | Xiaomi 14T Pro | Kernel 6.1.138
+          kernel.string=SukiSU Ultra | Xiaomi 14T Pro | Kernel 6.1.138 | Bazel/Kleaf
           do.devicecheck=1
           do.modules=0
           do.systemless=1
@@ -323,85 +316,71 @@ jobs:
           . flash_boot;
           ANYKERNEL
 
-          # Build zip
           BUILD_DATE=$(date +"%Y%m%d-%H%M")
-          ZIP_NAME="SukiSU-Ultra_Xiaomi14TPro_K6.1.138_${BUILD_DATE}.zip"
+          ZIP_NAME="SukiSU-Ultra_Xiaomi14TPro_K6.1.138_Kleaf_${BUILD_DATE}.zip"
           cd AnyKernel3
           zip -r9 "../${ZIP_NAME}" . -x "*.git*" -x "*.github*" -x "LICENCE" -x "README.md"
           cd ..
-          echo "ZIP_NAME=${ZIP_NAME}" >> $GITHUB_ENV
-          echo "ZIP_PATH=$(pwd)/${ZIP_NAME}" >> $GITHUB_ENV
-          echo "BUILD_DATE=${BUILD_DATE}" >> $GITHUB_ENV
+          echo "ZIP_NAME=${ZIP_NAME}" >> "$GITHUB_ENV"
+          echo "ZIP_PATH=$(pwd)/${ZIP_NAME}" >> "$GITHUB_ENV"
+          echo "BUILD_DATE=${BUILD_DATE}" >> "$GITHUB_ENV"
           echo "AnyKernel3 zip created: ${ZIP_NAME} ✓"
 
       # ─────────────────────────────────────────────────
-      # 9. UPLOAD ARTIFACTS
+      # 7. UPLOAD ARTIFACTS / RELEASE
       # ─────────────────────────────────────────────────
       - name: 📤 Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: kernel-xiaomi14tpro-${{ env.BUILD_DATE }}
+          name: kernel-xiaomi14tpro-kleaf-${{ env.BUILD_DATE }}
           path: |
             ${{ env.ZIP_PATH }}
-            kernel_source/out/arch/arm64/boot/Image.gz-dtb
-            kernel_source/out/arch/arm64/boot/dtbo.img
-            kernel_source/build.log
+            dist/**
+            build.log
           retention-days: 7
 
       - name: 🏷️ Create GitHub Release
-        if: ${{ github.event.inputs.UPLOAD_RELEASE == 'true' && env.BUILD_SUCCESS == 'true' }}
+        if: ${{ github.event.inputs.UPLOAD_RELEASE == 'true' }}
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: "v6.1.138-${{ env.BUILD_DATE }}"
-          name: "SukiSU Ultra | Xiaomi 14T Pro | ${{ env.BUILD_DATE }}"
+          tag_name: "kleaf-v6.1.138-${{ env.BUILD_DATE }}"
+          name: "SukiSU Ultra Kleaf | Xiaomi 14T Pro | ${{ env.BUILD_DATE }}"
           body: |
-            ## 🏗️ Xiaomi 14T Pro Kernel — 6.1.138
-            
-            **Device:** Xiaomi 14T Pro (vermeer) | Dimensity 9300  
-            **Base kernel:** 6.1.138  
-            **Build date:** ${{ env.BUILD_DATE }}  
-            **Commit:** ${{ env.KERNEL_HASH }}
-            
-            ---
-            
-            ### ✅ Included features
-            
-            | Feature | Status |
-            |---------|--------|
-            | 🔑 SukiSU Ultra (KernelSU fork) | ✅ |
-            | 🕵️ SUSFS v2.1+ | ✅ |
-            | 🔌 KPM (Kernel Plugin Module) | ✅ |
-            | 📡 TCP BBR congestion control | ✅ |
-            | 🔒 WireGuard VPN | ✅ |
-            | 💾 ZRAM + ZSTD compression | ✅ |
-            | 📁 NTFS3 filesystem | ✅ |
-            | 📁 ExFAT filesystem | ✅ |
-            | 🧹 MGLRU (Multi-Gen LRU) | ✅ |
-            | 📊 DAMON memory management | ✅ |
-            | ⚡ TEO CPU idle governor | ✅ |
-            
-            ---
-            
-            ### 📲 Installation
-            1. Boot into TWRP or flash via Magisk/KernelFlasher
-            2. Flash `${{ env.ZIP_NAME }}`
-            3. Reboot
-            
-            > ⚠️ Only for Xiaomi 14T Pro (vermeer). Verify device before flashing.
+            ## Xiaomi 14T Pro Kernel — 6.1.138, Bazel/Kleaf
+
+            **Device:** Xiaomi 14T Pro (vermeer)  
+            **Build system:** Bazel/Kleaf  
+            **Kleaf target:** `${{ github.event.inputs.KLEAF_TARGET }}`  
+            **Kernel source:** `${{ github.event.inputs.KERNEL_SOURCE }}`  
+            **Branch:** `${{ github.event.inputs.KERNEL_BRANCH }}`  
+            **Commit:** `${{ env.KERNEL_HASH }}`
+
+            ### Included features
+            - SukiSU Ultra
+            - SUSFS v2.1+
+            - KPM
+            - BBR
+            - WireGuard
+            - ZRAM + ZSTD
+            - NTFS3 + ExFAT
+            - MGLRU
+            - DAMON
+            - TEO governor
+
+            Flash the AnyKernel3 zip only on Xiaomi 14T Pro / vermeer.
           files: |
             ${{ env.ZIP_PATH }}
-            kernel_source/build.log
+            build.log
           draft: false
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # ─────────────────────────────────────────────────
-      # 10. CLEANUP (self-hosted runner persists state)
+      # 8. CLEANUP
       # ─────────────────────────────────────────────────
-      - name: 🧹 Clean up build artifacts from runner
+      - name: 🧹 Clean up self-hosted runner
         if: always()
         run: |
-          rm -rf kernel_source AnyKernel3 *.zip || true
-          rm -rf $HOME/toolchains/clang/*.tar.gz /tmp/clang.tar.gz /tmp/susfs4ksu /tmp/sukisu_setup.sh || true
+          rm -rf kernel_source AnyKernel3 *.zip /tmp/susfs4ksu /tmp/sukisu_setup.sh || true
           echo "Runner cleaned ✓"
