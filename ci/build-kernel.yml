@@ -146,6 +146,18 @@ jobs:
           bash /tmp/sukisu_setup.sh "${{ env.SUKISU_REF }}"
           echo "SukiSU Ultra integrated ✓"
 
+      - name: 🔢 Fix KSU_VERSION — pin REPO_BRANCH to HEAD (tag, not main)
+        run: |
+          KBUILD="kernel_workspace/common/KernelSU/kernel/Kbuild"
+          if [ -f "$KBUILD" ]; then
+            sed -i 's/^REPO_BRANCH[[:space:]]*:=.*/REPO_BRANCH := HEAD/' "$KBUILD"
+            echo "Patched REPO_BRANCH → HEAD in $KBUILD ✓"
+            grep 'REPO_BRANCH' "$KBUILD"
+          else
+            echo "::warning::$KBUILD not found — KSU_VERSION fix skipped"
+          fi
+
+
       - name: 🕵️ Apply SUSFS v2.1+ (vendored)
         run: |
           DEPS="$GITHUB_WORKSPACE/repo/deps/susfs"
@@ -248,6 +260,13 @@ jobs:
           echo "Appended feature configs to $DEFCFG"
           tail -50 "$DEFCFG"
 
+      - name: 🧩 Enable KPM config (SukiSU Ultra)
+        if: ${{ inputs.ENABLE_KPM }}
+        run: |
+          cd kernel_workspace/common
+          echo "CONFIG_KPM=y" >> arch/arm64/configs/gki_defconfig
+          echo "Enabled CONFIG_KPM=y"
+
       - name: 🩹 Disable check_defconfig (we add extra configs)
         run: |
           cd kernel_workspace/common
@@ -311,6 +330,28 @@ jobs:
           echo "DIST_DIR=$(pwd)/dist" >> "$GITHUB_ENV"
           echo "Build done ✓"
           ls -lah dist
+
+      - name: 🚜 Patch kernel Image for KPM (patch_linux)
+        if: ${{ inputs.ENABLE_KPM }}
+        run: |
+          cd kernel_workspace/dist
+          if [ ! -f Image ]; then
+            echo "::error::dist/Image not found — cannot apply KPM patch"
+            ls -lah
+            exit 1
+          fi
+          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU_patch/main/kpm/patch_linux" -o patch_linux
+          chmod +x patch_linux
+          ./patch_linux
+          if [ ! -f oImage ]; then
+            echo "::error::patch_linux did not produce oImage"
+            ls -lah
+            exit 1
+          fi
+          rm -f Image
+          mv oImage Image
+          rm -f patch_linux
+          echo "KPM patch applied to dist/Image ✓"
 
       # ─────────────────────────────────────────────────
       # 6. PACKAGE ANYKERNEL3
