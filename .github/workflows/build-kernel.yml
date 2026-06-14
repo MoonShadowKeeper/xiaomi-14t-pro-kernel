@@ -227,11 +227,11 @@ jobs:
           CONFIG_NET_SCH_FQ=y
           CONFIG_DEFAULT_TCP_CONG="bbr"
           CONFIG_WIREGUARD=y
-          CONFIG_ZRAM=y
+          CONFIG_ZRAM=m
           CONFIG_ZRAM_DEF_COMP_ZSTD=y
           CONFIG_ZRAM_DEF_COMP="zstd"
           CONFIG_CRYPTO_ZSTD=y
-          CONFIG_ZSMALLOC=y
+          CONFIG_ZSMALLOC=m
           CONFIG_NTFS3_FS=y
           CONFIG_NTFS3_LZX_XPRESS=y
           CONFIG_NTFS3_FS_POSIX_ACL=y
