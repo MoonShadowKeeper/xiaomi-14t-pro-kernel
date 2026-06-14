@@ -1,28 +1,20 @@
-name: 🏗️ Build Xiaomi 14T Pro Kernel (6.1.138) — Bazel/Kleaf
+name: 🏗️ Build Xiaomi 14T Pro Kernel (6.1.138) — GKI/Kleaf
 
 on:
   workflow_dispatch:
     inputs:
-      KERNEL_SOURCE:
-        description: "Kernel source repo (owner/repo)"
+      ACK_BRANCH:
+        description: "Android Common Kernel manifest branch"
         required: true
-        default: "MoonShadowKeeper/xiaomi-14t-pro-kernel"
-      KERNEL_BRANCH:
-        description: "Kernel branch"
-        required: true
-        default: "master"
+        default: "common-android14-6.1"
       KLEAF_TARGET:
         description: "Kleaf dist target"
         required: true
         default: "//common:kernel_aarch64_dist"
-      BUILD_CONFIG:
-        description: "Optional BUILD_CONFIG fallback, only if repo lacks Kleaf target"
-        required: false
-        default: "common/build.config.gki.aarch64"
       SUSFS_BRANCH:
-        description: "SUSFS branch for kernel 6.1"
+        description: "SUSFS branch (must match kernel 6.1)"
         required: true
-        default: "kernel-6.1"
+        default: "gki-android14-6.1"
       ENABLE_KPM:
         description: "Enable KPM (Kernel Plugin Module)"
         required: false
@@ -41,17 +33,16 @@ permissions:
 env:
   KERNEL_VERSION: "6.1.138"
   ARCH: arm64
-  SUBARCH: arm64
   SUKISU_REPO: "SukiSU-Ultra/SukiSU-Ultra"
-  SUKISU_BRANCH: "main"
+  SUKISU_BRANCH: "susfs-main"
   SUSFS_REPO: "simonpunk/susfs4ksu"
   TZ: "UTC"
 
 jobs:
   build:
-    name: Build Kernel with Bazel/Kleaf
+    name: Build GKI Kernel with Kleaf
     runs-on: self-hosted
-    timeout-minutes: 180
+    timeout-minutes: 240
 
     steps:
       # ─────────────────────────────────────────────────
@@ -59,7 +50,7 @@ jobs:
       # ─────────────────────────────────────────────────
       - name: 🧹 Clean workspace
         run: |
-          rm -rf kernel_source AnyKernel3 out dist artifacts *.zip || true
+          rm -rf kernel_workspace AnyKernel3 *.zip build.log || true
 
       - name: 🛠️ Ensure build dependencies
         run: |
@@ -69,59 +60,55 @@ jobs:
               bc binutils bison build-essential ca-certificates ccache curl flex \
               git jq kmod libelf-dev libssl-dev libncurses-dev lz4 make \
               ninja-build pahole perl python3 python3-pip rsync unzip wget \
-              xz-utils zip zstd file || \
+              xz-utils zip zstd file python-is-python3 || \
               echo "::warning::Could not install all deps automatically — check the self-hosted runner"
           else
             echo "::warning::apt-get not found — make sure build deps are installed"
           fi
 
-      # ─────────────────────────────────────────────────
-      # 2. CLONE KERNEL SOURCE
-      # ─────────────────────────────────────────────────
-      - name: 📥 Clone kernel source
+      - name: 🔧 Install repo tool
         run: |
-          git clone --depth=1 \
-            --branch "${{ github.event.inputs.KERNEL_BRANCH }}" \
-            "https://github.com/${{ github.event.inputs.KERNEL_SOURCE }}" \
-            kernel_source
-          cd kernel_source
-          echo "KERNEL_DIR=$(pwd)" >> "$GITHUB_ENV"
-          echo "KERNEL_HASH=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
-          echo "Kernel source: ${{ github.event.inputs.KERNEL_SOURCE }} @ $(git rev-parse --short HEAD)"
+          mkdir -p "$HOME/bin"
+          if [ ! -x "$HOME/bin/repo" ]; then
+            curl -L https://storage.googleapis.com/git-repo-downloads/repo -o "$HOME/bin/repo"
+            chmod a+x "$HOME/bin/repo"
+          fi
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+          git config --global user.email "ci@local"
+          git config --global user.name "CI Builder"
+          git config --global color.ui false
 
-      - name: 🔎 Detect Kleaf/Bazel layout
+      # ─────────────────────────────────────────────────
+      # 2. SYNC CLEAN GKI SOURCES FROM GOOGLE (ACK)
+      # ─────────────────────────────────────────────────
+      - name: 📥 repo init + sync Android Common Kernel
         run: |
-          cd kernel_source
-          echo "Repo root files:"
-          ls -la | head -80
+          mkdir -p kernel_workspace
+          cd kernel_workspace
+          repo init --depth=1 \
+            -u https://android.googlesource.com/kernel/manifest \
+            -b "${{ github.event.inputs.ACK_BRANCH }}"
+          repo sync -c -j"$(nproc)" --no-tags --fail-fast
 
-          if [ -x "tools/bazel" ]; then
-            echo "BAZEL_CMD=tools/bazel" >> "$GITHUB_ENV"
-            echo "Found Kleaf wrapper: tools/bazel"
-          elif [ -x "build/kernel/kleaf/bazel.sh" ]; then
-            echo "BAZEL_CMD=build/kernel/kleaf/bazel.sh" >> "$GITHUB_ENV"
-            echo "Found Kleaf wrapper: build/kernel/kleaf/bazel.sh"
-          elif command -v bazel >/dev/null 2>&1; then
-            echo "BAZEL_CMD=bazel" >> "$GITHUB_ENV"
-            echo "Using system bazel"
-          elif command -v bazelisk >/dev/null 2>&1; then
-            echo "BAZEL_CMD=bazelisk" >> "$GITHUB_ENV"
-            echo "Using system bazelisk"
-          else
-            echo "::error::No Kleaf/Bazel wrapper found. Expected tools/bazel, build/kernel/kleaf/bazel.sh, bazel, or bazelisk."
+          echo "Synced. Common kernel version:"
+          head -5 common/Makefile || true
+
+      - name: 🔎 Verify Kleaf wrapper
+        run: |
+          cd kernel_workspace
+          if [ ! -x "tools/bazel" ]; then
+            echo "::error::tools/bazel not found after repo sync. ACK branch may be wrong."
+            ls -la
             exit 1
           fi
-
-          if [ ! -f "MODULE.bazel" ] && [ ! -f "WORKSPACE" ] && [ ! -f "WORKSPACE.bazel" ]; then
-            echo "::warning::No MODULE.bazel / WORKSPACE found at repo root. Kleaf target may need a different source tree layout."
-          fi
+          echo "Kleaf wrapper present ✓"
 
       # ─────────────────────────────────────────────────
-      # 3. SUKISU ULTRA + SUSFS
+      # 3. SUKISU ULTRA + SUSFS INTO common/
       # ─────────────────────────────────────────────────
       - name: 🔑 Integrate SukiSU Ultra
         run: |
-          cd kernel_source
+          cd kernel_workspace/common
           curl -LSs "https://raw.githubusercontent.com/${{ env.SUKISU_REPO }}/${{ env.SUKISU_BRANCH }}/kernel/setup.sh" -o /tmp/sukisu_setup.sh
           bash /tmp/sukisu_setup.sh "${{ env.SUKISU_BRANCH }}"
           echo "SukiSU Ultra integrated ✓"
@@ -132,14 +119,18 @@ jobs:
           rm -rf "$SUSFS_DIR"
           git clone --depth=1 \
             --branch "${{ github.event.inputs.SUSFS_BRANCH }}" \
-            "https://github.com/${{ env.SUSFS_REPO }}" \
-            "$SUSFS_DIR"
+            "https://github.com/${{ env.SUSFS_REPO }}" "$SUSFS_DIR"
 
-          cd kernel_source
+          cd kernel_workspace/common
+
+          # SUSFS source files into the kernel tree
+          cp "$SUSFS_DIR"/kernel_patches/fs/* fs/ 2>/dev/null || true
+          cp "$SUSFS_DIR"/kernel_patches/include/linux/* include/linux/ 2>/dev/null || true
 
           PATCH_APPLIED=0
           for p in \
-            "$SUSFS_DIR/kernel_patches/50_add_susfs_in_kernel-${{ github.event.inputs.SUSFS_BRANCH }}.patch" \
+            "$SUSFS_DIR/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch" \
+            "$SUSFS_DIR/kernel_patches/50_add_susfs_in_${{ github.event.inputs.SUSFS_BRANCH }}.patch" \
             "$SUSFS_DIR/kernel_patches/50_add_susfs_in_kernel.patch"; do
             if [ -f "$p" ]; then
               echo "Applying $p"
@@ -148,22 +139,19 @@ jobs:
           done
 
           if [ "$PATCH_APPLIED" != "1" ]; then
-            echo "::warning::SUSFS kernel patch was not found/applied. Check SUSFS repo layout."
+            echo "::warning::SUSFS kernel patch not found/applied for branch ${{ github.event.inputs.SUSFS_BRANCH }}. Check SUSFS repo layout."
           fi
-
-          if [ -f "$SUSFS_DIR/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" ]; then
-            patch -p1 < "$SUSFS_DIR/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" || true
-          fi
-
           echo "SUSFS step done ✓"
 
       # ─────────────────────────────────────────────────
-      # 4. CONFIG FRAGMENT FOR FEATURES
+      # 4. FEATURE CONFIG FRAGMENT
       # ─────────────────────────────────────────────────
-      - name: ⚙️ Create feature config fragment
+      - name: ⚙️ Append feature configs to gki_defconfig
         run: |
-          cd kernel_source
-          cat > feature_14tpro.config <<'EOF'
+          cd kernel_workspace/common
+          DEFCFG="arch/arm64/configs/gki_defconfig"
+
+          cat >> "$DEFCFG" <<'EOF'
           CONFIG_KSU=y
           CONFIG_KSU_SUSFS=y
           CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y
@@ -183,8 +171,6 @@ jobs:
           CONFIG_KPM=y
           CONFIG_KALLSYMS=y
           CONFIG_KALLSYMS_ALL=y
-          CONFIG_KPROBES=y
-          CONFIG_KPROBE_EVENTS=y
           CONFIG_TCP_CONG_BBR=y
           CONFIG_NET_SCH_FQ=y
           CONFIG_DEFAULT_TCP_CONG="bbr"
@@ -210,61 +196,34 @@ jobs:
           CONFIG_CPU_IDLE_GOV_TEO=y
           EOF
 
-          echo "Feature config fragment created: feature_14tpro.config"
-          cat feature_14tpro.config
-
-      - name: 🧩 Wire feature fragment into Kleaf if possible
-        run: |
-          cd kernel_source
-
-          # Generic Kleaf override. Many Kleaf trees respect KERNEL_CONFIG_FRAGMENTS.
-          echo "KERNEL_CONFIG_FRAGMENTS=$(pwd)/feature_14tpro.config" >> "$GITHUB_ENV"
-          echo "KLEAF_EXTRA_ARGS=--//build/kernel/kleaf:config_local=$(pwd)/feature_14tpro.config" >> "$GITHUB_ENV"
-
-          # Best-effort fallback for trees that still use arch configs under Kleaf.
-          if [ -f "common/arch/arm64/configs/gki_defconfig" ]; then
-            cat feature_14tpro.config >> common/arch/arm64/configs/gki_defconfig
-            echo "Appended feature fragment to common/arch/arm64/configs/gki_defconfig"
-          elif [ -f "arch/arm64/configs/gki_defconfig" ]; then
-            cat feature_14tpro.config >> arch/arm64/configs/gki_defconfig
-            echo "Appended feature fragment to arch/arm64/configs/gki_defconfig"
-          else
-            echo "No gki_defconfig found to append. Relying on Kleaf config fragment env."
-          fi
+          echo "Appended feature configs to $DEFCFG"
+          tail -50 "$DEFCFG"
 
       # ─────────────────────────────────────────────────
-      # 5. BAZEL/KLEAF BUILD
+      # 5. BUILD WITH BAZEL/KLEAF
       # ─────────────────────────────────────────────────
-      - name: 🧪 Query Kleaf target
+      - name: 🏗️ Build kernel (tools/bazel run dist)
         run: |
-          cd kernel_source
-          echo "Bazel command: $BAZEL_CMD"
-          echo "Target: ${{ github.event.inputs.KLEAF_TARGET }}"
-          $BAZEL_CMD query "${{ github.event.inputs.KLEAF_TARGET }}" || \
-            echo "::warning::Target query failed. Build step will still try it. If it fails, set KLEAF_TARGET to a valid *_dist target."
-
-      - name: 🏗️ Build kernel with Bazel/Kleaf
-        run: |
-          cd kernel_source
-          mkdir -p ../dist
+          cd kernel_workspace
+          mkdir -p dist
 
           set +e
-          $BAZEL_CMD run "${{ github.event.inputs.KLEAF_TARGET }}" \
-            -- \
-            --dist_dir="$(pwd)/../dist" 2>&1 | tee ../build.log
+          tools/bazel run "${{ github.event.inputs.KLEAF_TARGET }}" \
+            --config=fast \
+            -- --dist_dir="$(pwd)/dist" 2>&1 | tee ../build.log
           STATUS=${PIPESTATUS[0]}
           set -e
 
           if [ "$STATUS" != "0" ]; then
             echo "::error::Kleaf build failed with status $STATUS"
-            echo "Available *_dist targets:"
-            $BAZEL_CMD query 'kind(".*", //...:*)' 2>/dev/null | grep -E '(_dist$|kernel_.*dist)' | head -200 || true
+            echo "Available dist targets:"
+            tools/bazel query 'kind(".*", //common:*)' 2>/dev/null | grep -E '_dist$' | head -100 || true
             exit "$STATUS"
           fi
 
-          echo "DIST_DIR=$(pwd)/../dist" >> "$GITHUB_ENV"
-          echo "Kleaf build done ✓"
-          ls -lah ../dist
+          echo "DIST_DIR=$(pwd)/dist" >> "$GITHUB_ENV"
+          echo "Build done ✓"
+          ls -lah dist
 
       # ─────────────────────────────────────────────────
       # 6. PACKAGE ANYKERNEL3
@@ -273,36 +232,31 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AnyKernel3
 
+          DIST="kernel_workspace/dist"
           IMAGE=""
-          for f in \
-            dist/Image.gz-dtb \
-            dist/Image.gz \
-            dist/Image \
-            dist/bzImage; do
-            if [ -f "$f" ]; then IMAGE="$f"; break; fi
+          for f in "$DIST/Image.gz-dtb" "$DIST/Image.gz" "$DIST/Image"; do
+            [ -f "$f" ] && IMAGE="$f" && break
           done
 
           if [ -z "$IMAGE" ]; then
-            echo "::error::No kernel image found in dist. Files:"
-            find dist -maxdepth 2 -type f | sort
+            echo "::error::No kernel image found in dist:"
+            find "$DIST" -maxdepth 1 -type f | sort
             exit 1
           fi
 
-          cp "$IMAGE" AnyKernel3/$(basename "$IMAGE")
-          [ -f dist/dtbo.img ] && cp dist/dtbo.img AnyKernel3/ || true
-          [ -f dist/vendor_dlkm.img ] && cp dist/vendor_dlkm.img AnyKernel3/ || true
-          [ -f dist/system_dlkm.img ] && cp dist/system_dlkm.img AnyKernel3/ || true
+          cp "$IMAGE" "AnyKernel3/$(basename "$IMAGE")"
+          [ -f "$DIST/dtbo.img" ] && cp "$DIST/dtbo.img" AnyKernel3/ || true
 
           cat > AnyKernel3/anykernel.sh <<'ANYKERNEL'
           ## AnyKernel3 Ramdisk Mod Script
           properties() { '
-          kernel.string=SukiSU Ultra | Xiaomi 14T Pro | Kernel 6.1.138 | Bazel/Kleaf
+          kernel.string=SukiSU Ultra | Xiaomi 14T Pro (rothko) | GKI 6.1.138
           do.devicecheck=1
           do.modules=0
           do.systemless=1
           do.cleanup=1
           do.cleanuponabort=0
-          device.name1=vermeer
+          device.name1=rothko
           device.name2=xiaomi14tpro
           supported.versions=14-15
           supported.patchlevels=
@@ -317,14 +271,14 @@ jobs:
           ANYKERNEL
 
           BUILD_DATE=$(date +"%Y%m%d-%H%M")
-          ZIP_NAME="SukiSU-Ultra_Xiaomi14TPro_K6.1.138_Kleaf_${BUILD_DATE}.zip"
+          ZIP_NAME="SukiSU-Ultra_Xiaomi14TPro_GKI6.1.138_${BUILD_DATE}.zip"
           cd AnyKernel3
           zip -r9 "../${ZIP_NAME}" . -x "*.git*" -x "*.github*" -x "LICENCE" -x "README.md"
           cd ..
           echo "ZIP_NAME=${ZIP_NAME}" >> "$GITHUB_ENV"
           echo "ZIP_PATH=$(pwd)/${ZIP_NAME}" >> "$GITHUB_ENV"
           echo "BUILD_DATE=${BUILD_DATE}" >> "$GITHUB_ENV"
-          echo "AnyKernel3 zip created: ${ZIP_NAME} ✓"
+          echo "AnyKernel3 zip: ${ZIP_NAME} ✓"
 
       # ─────────────────────────────────────────────────
       # 7. UPLOAD ARTIFACTS / RELEASE
@@ -332,10 +286,10 @@ jobs:
       - name: 📤 Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: kernel-xiaomi14tpro-kleaf-${{ env.BUILD_DATE }}
+          name: kernel-xiaomi14tpro-gki-${{ env.BUILD_DATE }}
           path: |
             ${{ env.ZIP_PATH }}
-            dist/**
+            kernel_workspace/dist/Image*
             build.log
           retention-days: 7
 
@@ -343,19 +297,17 @@ jobs:
         if: ${{ github.event.inputs.UPLOAD_RELEASE == 'true' }}
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: "kleaf-v6.1.138-${{ env.BUILD_DATE }}"
-          name: "SukiSU Ultra Kleaf | Xiaomi 14T Pro | ${{ env.BUILD_DATE }}"
+          tag_name: "gki-v6.1.138-${{ env.BUILD_DATE }}"
+          name: "SukiSU Ultra GKI | Xiaomi 14T Pro | ${{ env.BUILD_DATE }}"
           body: |
-            ## Xiaomi 14T Pro Kernel — 6.1.138, Bazel/Kleaf
+            ## Xiaomi 14T Pro Kernel — GKI 6.1.138 (clean Google ACK + Kleaf)
 
-            **Device:** Xiaomi 14T Pro (vermeer)  
-            **Build system:** Bazel/Kleaf  
-            **Kleaf target:** `${{ github.event.inputs.KLEAF_TARGET }}`  
-            **Kernel source:** `${{ github.event.inputs.KERNEL_SOURCE }}`  
-            **Branch:** `${{ github.event.inputs.KERNEL_BRANCH }}`  
-            **Commit:** `${{ env.KERNEL_HASH }}`
+            **Device:** Xiaomi 14T Pro (rothko)  
+            **Build system:** Bazel/Kleaf from Android Common Kernel  
+            **ACK branch:** `${{ github.event.inputs.ACK_BRANCH }}`  
+            **Kleaf target:** `${{ github.event.inputs.KLEAF_TARGET }}`
 
-            ### Included features
+            ### Features
             - SukiSU Ultra
             - SUSFS v2.1+
             - KPM
@@ -367,7 +319,7 @@ jobs:
             - DAMON
             - TEO governor
 
-            Flash the AnyKernel3 zip only on Xiaomi 14T Pro / vermeer.
+            > GKI image. Flash on Xiaomi 14T Pro (rothko) only.
           files: |
             ${{ env.ZIP_PATH }}
             build.log
@@ -382,5 +334,5 @@ jobs:
       - name: 🧹 Clean up self-hosted runner
         if: always()
         run: |
-          rm -rf kernel_source AnyKernel3 *.zip /tmp/susfs4ksu /tmp/sukisu_setup.sh || true
+          rm -rf AnyKernel3 *.zip /tmp/susfs4ksu /tmp/sukisu_setup.sh || true
           echo "Runner cleaned ✓"
