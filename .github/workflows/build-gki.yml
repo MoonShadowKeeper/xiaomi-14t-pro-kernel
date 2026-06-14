@@ -10,7 +10,6 @@ on:
         type: choice
         options:
           - Xiaomi-14T-Pro
-          - Xiaomi-13-Pro
       kmi_version:
         description: 'Specific KMI Branch (e.g. common-android14-6.1-2024-04). Leave empty for latest.'
         required: false
@@ -40,19 +39,11 @@ jobs:
         INPUT_KMI_VERSION: ${{ github.event.inputs.kmi_version }}
         INPUT_TARGET_COMMIT: ${{ github.event.inputs.target_commit }}
       run: |
-        if [ "$INPUT_DEVICE" == "Xiaomi-14T-Pro" ]; then
-          DEFAULT_MANIFEST="common-android14-6.1"
-          echo "SUSFS_BRANCH=gki-android14-6.1"          >> $GITHUB_ENV
-          echo "SUSFS_PATCH=50_add_susfs_in_gki-android14-6.1.patch" >> $GITHUB_ENV
-          echo "GKI_VERSION=6.1"                          >> $GITHUB_ENV
-          DEFAULT_TARGET_COMMIT=""
-        else
-          DEFAULT_MANIFEST="common-android13-5.15"
-          echo "SUSFS_BRANCH=gki-android13-5.15"          >> $GITHUB_ENV
-          echo "SUSFS_PATCH=50_add_susfs_in_gki-android13-5.15.patch" >> $GITHUB_ENV
-          echo "GKI_VERSION=5.15"                          >> $GITHUB_ENV
-          DEFAULT_TARGET_COMMIT="bf0a81a7f319"
-        fi
+        DEFAULT_MANIFEST="common-android14-6.1"
+        echo "SUSFS_BRANCH=gki-android14-6.1"          >> $GITHUB_ENV
+        echo "SUSFS_PATCH=50_add_susfs_in_gki-android14-6.1.patch" >> $GITHUB_ENV
+        echo "GKI_VERSION=6.1"                          >> $GITHUB_ENV
+        DEFAULT_TARGET_COMMIT=""
 
         if [ -n "$INPUT_KMI_VERSION" ]; then
           echo "MANIFEST_BRANCH=$INPUT_KMI_VERSION"      >> $GITHUB_ENV
