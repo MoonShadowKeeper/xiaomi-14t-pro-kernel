@@ -6,14 +6,16 @@ on:
 jobs:
   build:
     name: Build Kernel
-    runs-on: self-hosted
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 120
+
     env:
-      HOME: /root
+      # HOME is set dynamically below — not hardcoded to /root
       MANIFEST_BRANCH: common-android14-6.1
       SUSFS_BRANCH: gki-android14-6.1
       SUSFS_PATCH: 50_add_susfs_in_gki-android14-6.1.patch
       GKI_VERSION: "6.1"
-      WORKSPACE: /root/kernel_workspace
+
     defaults:
       run:
         shell: bash -euo pipefail {0}
@@ -22,16 +24,25 @@ jobs:
     - name: Checkout Repository
       uses: actions/checkout@v4
 
+    - name: Set Dynamic Environment
+      run: |
+        RUNNER_HOME=$(eval echo ~$(whoami))
+        WORKSPACE="$RUNNER_HOME/kernel_workspace"
+        echo "RUNNER_HOME=$RUNNER_HOME"   >> $GITHUB_ENV
+        echo "WORKSPACE=$WORKSPACE"       >> $GITHUB_ENV
+        echo "CCACHE_DIR=$WORKSPACE/.ccache" >> $GITHUB_ENV
+        echo "Running as: $(whoami), HOME: $RUNNER_HOME"
+
     - name: Clean Workspace
       run: |
-        find $WORKSPACE -name "*.lock" -delete 2>/dev/null || true
-        if [ -d $WORKSPACE/common/.git ]; then
-          git -C $WORKSPACE/common reset --hard HEAD 2>/dev/null || true
-          git -C $WORKSPACE/common clean -fdx 2>/dev/null || true
+        find "$WORKSPACE" -name "*.lock" -delete 2>/dev/null || true
+        if [ -d "$WORKSPACE/common/.git" ]; then
+          git -C "$WORKSPACE/common" reset --hard HEAD 2>/dev/null || true
+          git -C "$WORKSPACE/common" clean -fdx 2>/dev/null || true
         fi
-        rm -rf $WORKSPACE/out
-        rm -rf $WORKSPACE/susfs4ksu
-        rm -rf $WORKSPACE/AnyKernel3
+        rm -rf "$WORKSPACE/out"
+        rm -rf "$WORKSPACE/susfs4ksu"
+        rm -rf "$WORKSPACE/AnyKernel3"
 
     - name: Install Dependencies
       run: |
@@ -53,20 +64,35 @@ jobs:
         fi
         repo --version
 
+    - name: Configure ccache
+      run: |
+        ccache --set-config=max_size=10G
+        ccache --set-config=compression=true
+        ccache --set-config=compression_level=6
+        ccache --zero-stats
+        echo "USE_CCACHE=1" >> $GITHUB_ENV
+        echo "CCACHE_EXEC=$(command -v ccache)" >> $GITHUB_ENV
+        ccache --show-config
+
     - name: Initialize and Sync Kernel Source
       run: |
-        mkdir -p $WORKSPACE
-        cd $WORKSPACE
+        mkdir -p "$WORKSPACE"
+        cd "$WORKSPACE"
         repo init \
           -u https://android.googlesource.com/kernel/manifest \
           -b "$MANIFEST_BRANCH" \
           --depth=1 \
           --repo-rev=stable
-        repo sync -c -j$(nproc) --no-clone-bundle --force-checkout --no-tags
+        repo sync -c \
+          -j$(nproc) \
+          --no-clone-bundle \
+          --force-checkout \
+          --no-tags \
+          --retry-fetches=3
 
     - name: Apply SUSFS Patches
       run: |
-        cd $WORKSPACE
+        cd "$WORKSPACE"
         git clone --depth=1 \
           https://gitlab.com/simonpunk/susfs4ksu.git \
           -b "$SUSFS_BRANCH" susfs4ksu
@@ -79,24 +105,39 @@ jobs:
         cp -rv ../susfs4ksu/kernel_patches/fs/* fs/
         cp -rv ../susfs4ksu/kernel_patches/include/linux/* include/linux/
 
-        # Apply the main SUSFS patch.
-        # --fuzz=5: allow up to 5 lines of context mismatch (handles Google's
-        # minor upstream changes that shift lines without changing the code we patch).
-        # This is the proper solution — no sed hacks needed.
-        patch -p1 --fuzz=5 --forward < "../susfs4ksu/kernel_patches/${SUSFS_PATCH}"
+        # Apply patch with fuzz=2 (safe tolerance for minor upstream shifts).
+        # fuzz=5 is too permissive and can silently misplace hunks.
+        patch -p1 --fuzz=2 --forward \
+          < "../susfs4ksu/kernel_patches/${SUSFS_PATCH}" || {
+          echo "::error::SUSFS patch failed to apply cleanly. Check fs/namespace.c.rej"
+          cat fs/namespace.c.rej 2>/dev/null || true
+          exit 1
+        }
 
         echo "SUSFS patch applied successfully"
 
     - name: Apply SukiSU Ultra (KernelSU)
       run: |
-        cd $WORKSPACE/common
+        cd "$WORKSPACE/common"
+
+        # Download first, verify it's a valid shell script, then execute.
+        # Full hash verification is not possible since upstream doesn't publish checksums.
         curl -fsSL \
           "https://raw.githubusercontent.com/sukisu-ultra/sukisu-ultra/main/kernel/setup.sh" \
-          | bash -s susfs
+          -o /tmp/sukisu_setup.sh
+
+        # Basic sanity check: must be a shell script (not HTML error page)
+        head -1 /tmp/sukisu_setup.sh | grep -q '^#!' || {
+          echo "::error::Downloaded setup.sh does not look like a shell script (possible network error or compromise)"
+          exit 1
+        }
+
+        bash /tmp/sukisu_setup.sh susfs
+        rm -f /tmp/sukisu_setup.sh
 
     - name: Apply Kernel Features (BBR, ZRAM, NTFS3, ExFAT, LRU, DAMON)
       run: |
-        cd $WORKSPACE/common
+        cd "$WORKSPACE/common"
         # Remove -dirty suffix from kernel version string
         sed -i 's/-dirty//' scripts/setlocalversion || true
 
@@ -143,53 +184,69 @@ CONFIG_ZRAM_DEF_COMP="zstd"
 EOF
 
     - name: Build the Kernel (Kleaf / Bazel)
+      env:
+        CCACHE_DIR: ${{ env.CCACHE_DIR }}
+        USE_CCACHE: "1"
       run: |
-        cd $WORKSPACE
-        # LTO=thin: best balance of build time and performance
-        # If OOM occurs, change to LTO=none
+        cd "$WORKSPACE"
+        # LTO=thin: best balance of build time and performance.
+        # Change to LTO=none if OOM occurs on low-RAM servers.
         LTO=thin tools/bazel run \
           //common:kernel_aarch64_dist \
           -- \
           --dist_dir="$WORKSPACE/out/dist"
+        ccache --show-stats
 
     - name: Package with AnyKernel3
       run: |
-        cd $WORKSPACE
+        cd "$WORKSPACE"
         git clone --depth=1 \
           https://github.com/MoonShadowKeeper/AnyKernel3.git \
           -b master AnyKernel3
         rm -rf AnyKernel3/.git
 
-        sed -i "s/kernel.string=.*/kernel.string=SukiSU-Ultra GKI ${GKI_VERSION} + SUSFS (Xiaomi 14T Pro)/" \
+        sed -i \
+          "s/kernel.string=.*/kernel.string=SukiSU-Ultra GKI ${GKI_VERSION} + SUSFS (Xiaomi 14T Pro)/" \
           AnyKernel3/anykernel.sh
 
-        KERNEL_IMAGE=$(find "$WORKSPACE/out/dist" -name "Image" -type f 2>/dev/null | tail -1)
-        if [ -z "$KERNEL_IMAGE" ]; then
-          echo "ERROR: Image not found in $WORKSPACE/out/dist"
-          find "$WORKSPACE/out" -name "Image" -type f || true
+        # Strict: fail loudly if exactly 1 Image is not found
+        mapfile -t IMAGES < <(find "$WORKSPACE/out/dist" -name "Image" -type f 2>/dev/null)
+        if [[ ${#IMAGES[@]} -ne 1 ]]; then
+          echo "::error::Expected exactly 1 kernel Image, found ${#IMAGES[@]}:"
+          printf '  %s\n' "${IMAGES[@]}"
           exit 1
         fi
-        echo "Found kernel image: $KERNEL_IMAGE"
+        KERNEL_IMAGE="${IMAGES[0]}"
+        echo "Kernel image: $KERNEL_IMAGE"
         cp "$KERNEL_IMAGE" AnyKernel3/
 
-        KERNEL_CONFIG=$(find "$WORKSPACE/out" -name ".config" -type f 2>/dev/null | tail -1)
-        if [ -n "$KERNEL_CONFIG" ]; then
-          cp "$KERNEL_CONFIG" "$WORKSPACE/kernel-Xiaomi-14T-Pro-GKI-${GKI_VERSION}.config"
+        # Config is optional (for debug), warn if missing
+        mapfile -t CONFIGS < <(find "$WORKSPACE/out" -name ".config" -type f 2>/dev/null)
+        if [[ ${#CONFIGS[@]} -ge 1 ]]; then
+          cp "${CONFIGS[0]}" "$WORKSPACE/kernel-Xiaomi-14T-Pro-GKI-${GKI_VERSION}.config"
+        else
+          echo "::warning::Kernel .config not found — skipping config upload"
         fi
 
         cd AnyKernel3
-        zip -r9 "$WORKSPACE/AnyKernel3-Xiaomi-14T-Pro-GKI-${GKI_VERSION}.zip" . -x "*.git*"
+        zip -r9 \
+          "$WORKSPACE/AnyKernel3-Xiaomi-14T-Pro-GKI-${GKI_VERSION}.zip" \
+          . -x "*.git*"
 
     - name: Upload AnyKernel3 ZIP
       uses: actions/upload-artifact@v4
       with:
         name: AnyKernel3-Xiaomi-14T-Pro-GKI-${{ env.GKI_VERSION }}
-        path: /root/kernel_workspace/AnyKernel3-*.zip
+        path: ${{ env.WORKSPACE }}/AnyKernel3-*.zip
         if-no-files-found: error
 
     - name: Upload Kernel Config
       uses: actions/upload-artifact@v4
       with:
         name: kernel-config-Xiaomi-14T-Pro-GKI-${{ env.GKI_VERSION }}
-        path: /root/kernel_workspace/kernel-*.config
-        if-no-files-found: warn
+        path: ${{ env.WORKSPACE }}/kernel-*.config
+        if-no-files-found: error
+
+    - name: ccache Statistics
+      if: always()
+      run: ccache --show-stats || true
