@@ -1,4 +1,4 @@
-name: 🏗️ Build Xiaomi 14T Pro Kernel (6.1.138) — GKI/Kleaf
+name: Build Xiaomi 14T Pro Kernel 6.1.138 Wild KernelSU-Next
 
 on:
   workflow_dispatch:
@@ -11,19 +11,10 @@ on:
         description: "Kleaf dist target"
         required: true
         default: "//common:kernel_aarch64_dist"
-      SUSFS_BRANCH:
-        description: "SUSFS branch (must match kernel 6.1)"
-        required: true
-        default: "gki-android14-6.1"
-      ENABLE_KPM:
-        description: "Enable KPM (Kernel Plugin Module)"
-        required: false
-        default: "false"
-        type: boolean
       UPLOAD_RELEASE:
         description: "Upload GitHub Release"
         required: false
-        default: "true"
+        default: "false"
         type: boolean
 
 permissions:
@@ -33,34 +24,29 @@ permissions:
 env:
   KERNEL_VERSION: "6.1.138"
   ARCH: arm64
-  SUKISU_REPO: "SukiSU-Ultra/SukiSU-Ultra"
-  SUKISU_REF: "0ca744a88835" # v4.1.3 / KSU_VERSION 40796 (main~5, avoids 40801)
+  KSUN_SETUP_URL: "https://raw.githubusercontent.com/pershoot/KernelSU-Next/dev-susfs/kernel/setup.sh"
+  KSUN_REF: "dev-susfs"
   SUSFS_GITLAB: "https://gitlab.com/simonpunk/susfs4ksu.git"
   TZ: "UTC"
   HOME: "/root"
 
 jobs:
   build:
-    name: Build GKI Kernel with SukiSU 40796 + KPM
+    name: Build Wild FULL KernelSU-Next plus extras
     runs-on: self-hosted
     timeout-minutes: 240
 
     steps:
-      # ─────────────────────────────────────────────────
-      # 1. SELF-HOSTED RUNNER SETUP
-      # ─────────────────────────────────────────────────
-      - name: 📦 Checkout repo (vendored deps)
+      - name: Checkout repo vendored deps
         uses: actions/checkout@v4
         with:
           path: repo
 
-
-      - name: 🧹 Clean build artifacts (keep kernel_workspace cache)
+      - name: Clean build artifacts keep kernel workspace cache
         run: |
-          # Keep kernel_workspace between runs for fast incremental repo sync.
           rm -rf AnyKernel3 *.zip build.log || true
 
-      - name: 🛠️ Ensure build dependencies
+      - name: Ensure build dependencies
         run: |
           if command -v apt-get >/dev/null 2>&1; then
             sudo apt-get update -qq || true
@@ -69,12 +55,12 @@ jobs:
               git jq kmod libelf-dev libssl-dev libncurses-dev lz4 make \
               ninja-build pahole perl python3 python3-pip rsync unzip wget \
               xz-utils zip zstd file python-is-python3 || \
-              echo "::warning::Could not install all deps automatically — check the self-hosted runner"
+              echo "::warning::Could not install all deps automatically"
           else
-            echo "::warning::apt-get not found — make sure build deps are installed"
+            echo "::warning::apt-get not found. Make sure build deps are installed"
           fi
 
-      - name: 🕒 Set WildKernels build timestamp
+      - name: Set WildKernels build timestamp
         run: |
           FIXED_BUILD_DATE="2025-06-05 04:20:00 UTC"
           SOURCE_DATE_EPOCH=$(date -u -d "$FIXED_BUILD_DATE" +%s)
@@ -83,7 +69,7 @@ jobs:
           echo "GIT_COMMITTER_DATE=$(date -u -d @${SOURCE_DATE_EPOCH} '+%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_ENV"
           echo "GIT_AUTHOR_DATE=$(date -u -d @${SOURCE_DATE_EPOCH} '+%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_ENV"
 
-      - name: 🔧 Install repo tool
+      - name: Install repo tool
         run: |
           mkdir -p "$HOME/bin"
           if [ ! -x "$HOME/bin/repo" ]; then
@@ -95,17 +81,13 @@ jobs:
           git config --global user.name "CI Builder"
           git config --global color.ui false
 
-      # ─────────────────────────────────────────────────
-      # 2. SYNC CLEAN GKI SOURCES FROM GOOGLE (ACK)
-      # ─────────────────────────────────────────────────
-      - name: 📥 repo init + sync Android Common Kernel
+      - name: Repo init and sync Android Common Kernel
         run: |
           mkdir -p kernel_workspace
           cd kernel_workspace
 
           if [ -d .repo ]; then
-            echo "Reusing cached workspace — clearing stale locks + local changes"
-            # Remove stale lock files left by interrupted fetches/syncs
+            echo "Reusing cached workspace"
             find .repo -name '*.lock' -delete 2>/dev/null || true
             find . -path '*/.git/*.lock' -delete 2>/dev/null || true
             find . -name 'shallow.lock' -delete 2>/dev/null || true
@@ -114,7 +96,7 @@ jobs:
               -u https://android.googlesource.com/kernel/manifest \
               -b "${{ github.event.inputs.ACK_BRANCH }}"
             if ! repo sync -c -j"$(nproc)" --no-tags --force-sync --optimized-fetch; then
-              echo "Incremental sync failed — wiping cache and doing a clean sync"
+              echo "Incremental sync failed. Wiping cache and doing clean sync"
               cd ..
               rm -rf kernel_workspace
               mkdir -p kernel_workspace
@@ -125,7 +107,7 @@ jobs:
               repo sync -c -j"$(nproc)" --no-tags --fail-fast
             fi
           else
-            echo "Fresh workspace — full repo init + sync"
+            echo "Fresh workspace"
             repo init --depth=1 \
               -u https://android.googlesource.com/kernel/manifest \
               -b "${{ github.event.inputs.ACK_BRANCH }}"
@@ -135,63 +117,63 @@ jobs:
           echo "Synced. Common kernel version:"
           head -5 common/Makefile || true
 
-      - name: 🔎 Verify Kleaf wrapper
+      - name: Verify Kleaf wrapper
         run: |
           cd kernel_workspace
-          if [ ! -x "tools/bazel" ]; then
-            echo "::error::tools/bazel not found after repo sync. ACK branch may be wrong."
-            ls -la
+          if [ ! -x tools/bazel ]; then
+            echo "::error::tools/bazel not found after repo sync"
             exit 1
           fi
-          echo "Kleaf wrapper present ✓"
+          echo "Kleaf wrapper present"
 
-      # ─────────────────────────────────────────────────
-      # 3. SUKISU ULTRA + SUSFS INTO common/
-      # ─────────────────────────────────────────────────
-      - name: 🔑 Integrate SukiSU Ultra
+      - name: Setup KernelSU-Next Wild style
         run: |
-          cd kernel_workspace/common
-          curl -LSs "https://raw.githubusercontent.com/${{ env.SUKISU_REPO }}/main/kernel/setup.sh" -o /tmp/sukisu_setup.sh
-          bash /tmp/sukisu_setup.sh "${{ env.SUKISU_REF }}"
-          # Force KSU_VERSION to count the checked-out commit, not current upstream main.
-          sed -i 's/^REPO_BRANCH[[:space:]]*:=.*/REPO_BRANCH := HEAD/' KernelSU/kernel/Kbuild
-          grep -E '^(REPO_BRANCH|VERSION_BASE|VERSION_OFFSET)' KernelSU/kernel/Kbuild
-          git -C KernelSU rev-parse --short=12 HEAD
-          echo "SukiSU Ultra integrated ✓"
+          cd kernel_workspace
+          curl -LSs "${{ env.KSUN_SETUP_URL }}" | bash -s "${{ env.KSUN_REF }}"
 
-      - name: 🕵️ Apply SUSFS v2.1+ (vendored)
+          cd KernelSU-Next/kernel
+          COMMITS_COUNT=$(git rev-list --count HEAD)
+          KSU_VERSION=$((30000 + COMMITS_COUNT))
+          sed -i "s/^KSU_VERSION_FALLBACK := 1$/KSU_VERSION_FALLBACK := ${KSU_VERSION}/" Kbuild || true
+          KSU_GIT_TAG="$(git describe --tags --abbrev=0 2>/dev/null || echo v0.0.1)"
+          sed -i "s/^KSU_VERSION_TAG_FALLBACK := v0.0.1$/KSU_VERSION_TAG_FALLBACK := ${KSU_GIT_TAG}/" Kbuild || true
+          echo "KernelSU-Next version fallback: ${KSU_VERSION} ${KSU_GIT_TAG}"
+
+          cd ..
+          curl -LSs "https://raw.githubusercontent.com/WildKernels/GKI_KernelSU_SUSFS/main/.github/actions/kernelsu/patches/static.patch" -o static.patch
+          if patch --dry-run -p1 < static.patch >/dev/null 2>&1; then
+            patch -p1 < static.patch
+            echo "Wild KernelSU-Next static.patch applied"
+          else
+            echo "::warning::Wild static.patch did not apply cleanly, skipping"
+          fi
+
+      - name: Apply SUSFS v2.1 plus vendored patch
         run: |
           DEPS="$GITHUB_WORKSPACE/repo/deps/susfs"
           cd kernel_workspace/common
 
-          # SUSFS new source files (no conflict — fresh files)
           cp "$DEPS"/fs/susfs.c fs/ 2>/dev/null || true
           cp "$DEPS"/include/linux/susfs*.h include/linux/ 2>/dev/null || true
 
           PATCH="$DEPS/50_add_susfs_in_gki-android14-6.1.patch"
           [ -f "$PATCH" ] || { echo "::error::vendored SUSFS patch missing at $PATCH"; exit 1; }
-          echo "Using vendored SUSFS patch: $PATCH"
 
-          # Apply with patch(1) using fuzz so minor context/line-number drift at
-          # the current ACK HEAD is tolerated (no slow git history fetch needed).
           if patch -p1 --no-backup-if-mismatch --fuzz=3 < "$PATCH"; then
-            echo "SUSFS applied via patch --fuzz=3 ✓"
+            echo "SUSFS applied"
           else
-            echo "::error::SUSFS patch failed even with fuzz. Check .rej files below."
-            find . -name '*.rej' -exec echo '--- {} ---' \; -exec cat {} \; 2>/dev/null | head -120
+            echo "::error::SUSFS patch failed. Rejects:"
+            find . -name '*.rej' -exec echo '--- {} ---' \; -exec cat {} \; 2>/dev/null | head -160
             exit 1
           fi
 
-      - name: 🛡️ Integrate Baseband Guard (vendored)
+      - name: Integrate Baseband Guard vendored
         run: |
           DEPS="$GITHUB_WORKSPACE/repo/deps/baseband-guard"
           cd kernel_workspace/common
 
-          # Vendor BBG into the kernel tree
           rm -rf Baseband-guard
           cp -r "$DEPS" Baseband-guard
-
-          # Wire into security/ (mirrors BBG setup.sh modern-LSM path)
           ln -sfn ../Baseband-guard security/baseband-guard
           grep -q 'baseband-guard/baseband_guard.o' security/Makefile || \
             grep -q 'obj-$(CONFIG_BBG)' security/Makefile || \
@@ -207,10 +189,9 @@ jobs:
                 }
               }' security/Kconfig > security/Kconfig.tmp && mv security/Kconfig.tmp security/Kconfig
           fi
-          echo "Baseband Guard integrated ✓"
+          echo "Baseband Guard integrated"
 
-
-      - name: 🧩 DroidSpaces-OSS (WildKernels style)
+      - name: DroidSpaces-OSS Wild style
         run: |
           cd kernel_workspace
           rm -rf Droidspaces-OSS
@@ -218,22 +199,9 @@ jobs:
           cd common
           cp ../Droidspaces-OSS/Documentation/resources/kernel-patches/GKI/below-kernel-6.12/001.GKI-below-6.12-fix_sysvipc_kabi_6_7_8.patch ./
           patch -p1 < 001.GKI-below-6.12-fix_sysvipc_kabi_6_7_8.patch
-          cat >> arch/arm64/configs/gki_defconfig <<'EOF'
-          CONFIG_PID_NS=y
-          CONFIG_SYSVIPC=y
-          CONFIG_POSIX_MQUEUE=y
-          CONFIG_IPC_NS=y
-          CONFIG_DEVTMPFS=y
-          CONFIG_BINFMT_MISC=y
-          CONFIG_BINFMT_SCRIPT=y
-          CONFIG_BINFMT_ELF=y
-          EOF
-          git add -A && git commit -q -m "DroidSpaces-OSS" || true
+          git add -A && git commit -q -m "Wild: DroidSpaces-OSS" || true
 
-      # ─────────────────────────────────────────────────
-      # 4. FEATURE CONFIG FRAGMENT
-      # ─────────────────────────────────────────────────
-      - name: ⚙️ Append feature configs to gki_defconfig
+      - name: Append Wild FULL configs plus user extras
         run: |
           cd kernel_workspace/common
           DEFCFG="arch/arm64/configs/gki_defconfig"
@@ -244,35 +212,103 @@ jobs:
           CONFIG_KSU_SUSFS_SUS_PATH=y
           CONFIG_KSU_SUSFS_SUS_MOUNT=y
           CONFIG_KSU_SUSFS_SUS_KSTAT=y
+          CONFIG_KSU_SUSFS_SUS_OVERLAYFS=y
           CONFIG_KSU_SUSFS_SUS_MAP=y
           CONFIG_KSU_SUSFS_SPOOF_UNAME=y
           CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
           CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
           CONFIG_KSU_SUSFS_ENABLE_LOG=y
           CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
+          CONFIG_KSU_MANUAL_HOOK=y
+          CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y
+
           CONFIG_BBG=y
           CONFIG_LSM="landlock,lockdown,yama,loadpin,safesetid,integrity,selinux,smack,tomoyo,apparmor,bpf,baseband_guard"
+
+          CONFIG_PID_NS=y
+          CONFIG_SYSVIPC=y
+          CONFIG_POSIX_MQUEUE=y
+          CONFIG_IPC_NS=y
+          CONFIG_DEVTMPFS=y
+          CONFIG_BINFMT_MISC=y
+          CONFIG_BINFMT_SCRIPT=y
+          CONFIG_BINFMT_ELF=y
+
+          CONFIG_OVERLAY_FS=y
+          CONFIG_TMPFS_XATTR=y
+          CONFIG_TMPFS_POSIX_ACL=y
+          CONFIG_KALLSYMS=y
+          CONFIG_KALLSYMS_ALL=y
+
+          CONFIG_IP_SET=y
+          CONFIG_IP_SET_MAX=65534
+          CONFIG_IP_SET_BITMAP_IP=y
+          CONFIG_IP_SET_BITMAP_IPMAC=y
+          CONFIG_IP_SET_BITMAP_PORT=y
+          CONFIG_IP_SET_HASH_IP=y
+          CONFIG_IP_SET_HASH_IPMARK=y
+          CONFIG_IP_SET_HASH_IPPORT=y
+          CONFIG_IP_SET_HASH_IPPORTIP=y
+          CONFIG_IP_SET_HASH_IPPORTNET=y
+          CONFIG_IP_SET_HASH_IPMAC=y
+          CONFIG_IP_SET_HASH_MAC=y
+          CONFIG_IP_SET_HASH_NETPORTNET=y
+          CONFIG_IP_SET_HASH_NET=y
+          CONFIG_IP_SET_HASH_NETNET=y
+          CONFIG_IP_SET_HASH_NETPORT=y
+          CONFIG_IP_SET_HASH_NETIFACE=y
+          CONFIG_IP_SET_LIST_SET=y
+          CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y
+          CONFIG_NETFILTER_XT_SET=y
+          CONFIG_NETFILTER_XT_TARGET_LOG=y
+          CONFIG_NETFILTER_XT_MATCH_RECENT=y
+          CONFIG_IP6_NF_NAT=y
+          CONFIG_IP6_NF_TARGET_MASQUERADE=y
+
+          CONFIG_TCP_CONG_ADVANCED=y
           CONFIG_TCP_CONG_BBR=y
-          CONFIG_NET_SCH_FQ=y
+          CONFIG_TCP_CONG_CUBIC=y
+          CONFIG_TCP_CONG_BIC=y
+          CONFIG_TCP_CONG_WESTWOOD=y
+          CONFIG_TCP_CONG_HTCP=y
+          CONFIG_DEFAULT_BBR=y
           CONFIG_DEFAULT_TCP_CONG="bbr"
+          CONFIG_NET_SCH_FQ=y
+          CONFIG_NET_SCH_FQ_CODEL=y
           CONFIG_WIREGUARD=y
+
+          CONFIG_ZSMALLOC=m
+          CONFIG_ZRAM=m
+          CONFIG_ZSTD_COMPRESS=y
+          CONFIG_ZSTD_DECOMPRESS=y
+          CONFIG_ZRAM_DEF_COMP_ZSTD=y
+          CONFIG_ZRAM_DEF_COMP="zstd"
+
+          CONFIG_EXFAT_FS=y
+          CONFIG_NTFS3_FS=y
+          CONFIG_NTFS3_LZX_XPRESS=y
+          CONFIG_NTFS3_FS_POSIX_ACL=y
+
+          CONFIG_LRU_GEN=y
+          CONFIG_LRU_GEN_ENABLED=y
+          CONFIG_LRU_GEN_STATS=y
+
+          CONFIG_DAMON=y
+          CONFIG_DAMON_VADDR=y
+          CONFIG_DAMON_PADDR=y
+          CONFIG_DAMON_SYSFS=y
+          CONFIG_DAMON_RECLAIM=y
+          CONFIG_DAMON_LRU_SORT=y
+
+          CONFIG_CPU_IDLE_GOV_TEO=y
           EOF
 
-          echo "Appended feature configs to $DEFCFG"
-          tail -50 "$DEFCFG"
+          echo "Appended Wild FULL plus user extras"
+          tail -120 "$DEFCFG"
 
-      - name: 🧩 Enable KPM config (SukiSU Ultra)
-        if: ${{ inputs.ENABLE_KPM }}
+      - name: Disable check_defconfig
         run: |
           cd kernel_workspace/common
-          echo "CONFIG_KPM=y" >> arch/arm64/configs/gki_defconfig
-          echo "Enabled CONFIG_KPM=y"
-
-      - name: 🩹 Disable check_defconfig (we add extra configs)
-        run: |
-          cd kernel_workspace/common
-          # Kleaf runs POST_DEFCONFIG_CMDS="check_defconfig" which fails because our
-          # appended options make gki_defconfig diverge from savedefconfig form.
           for f in build.config.gki build.config.gki.aarch64; do
             if [ -f "$f" ] && grep -q "check_defconfig" "$f"; then
               sed -i 's/check_defconfig//g' "$f"
@@ -281,39 +317,40 @@ jobs:
           done
           grep -rn "POST_DEFCONFIG_CMDS" build.config.* || true
 
-      - name: 🏷️ Apply WildKernels branding + module version bypass
+      - name: Apply WildKernels branding and module version bypass
         run: |
           cd kernel_workspace/common
 
-          # Match WildKernels uname -r format: 6.1.138-android14-Wild
           sed -i '$d' scripts/setlocalversion
           echo 'echo "-android14-Wild"' >> scripts/setlocalversion
           chmod +x scripts/setlocalversion
 
-          # WildKernels bypass: accept stock vendor modules even when vermagic differs.
           TARGET_FILE="kernel/module/version.c"
           if [ -f "$TARGET_FILE" ]; then
             sed -i '/bad_version:/{:a;n;/return 0;/{s/return 0;/return 1;/;b};ba}' "$TARGET_FILE"
-            grep -A 8 'bad_version:' "$TARGET_FILE" || true
+            if ! grep -A 8 'bad_version:' "$TARGET_FILE" | grep -q 'return 1;'; then
+              echo "::error::module version bypass failed"
+              grep -A 12 'bad_version:' "$TARGET_FILE" || true
+              exit 1
+            fi
           else
-            echo "::error::$TARGET_FILE not found for module version bypass"
+            echo "::error::$TARGET_FILE not found"
             exit 1
           fi
 
           git add -A && git commit -q -m "Wild: branding and module version bypass" || true
 
-      - name: 🧼 Clean dirty flags (vermagic must match for vendor modules)
+      - name: Clean dirty flags
         run: |
           cd kernel_workspace
-          # Strip -maybe-dirty / -dirty so the kernel release string matches stock,
-          # otherwise stock vendor_dlkm modules fail vermagic check → bootloop.
           sed -i "/stable_scmversion_cmd/s/-maybe-dirty//g" build/kernel/kleaf/impl/stamp.bzl 2>/dev/null || true
           sed -i 's/-dirty//' common/scripts/setlocalversion 2>/dev/null || true
           cd common
-          git config user.email "ci@local"; git config user.name "CI"
-          git add -A && git commit -q -m "clean dirty flag" || true
+          git config user.email "ci@local"
+          git config user.name "CI"
+          git add -A && git commit -q -m "Wild: clean dirty flag" || true
 
-      - name: 🔓 Remove protected exports (let vendor modules resolve symbols)
+      - name: Remove protected exports
         run: |
           cd kernel_workspace
           rm -rf common/android/abi_gki_protected_exports_* || true
@@ -323,12 +360,9 @@ jobs:
           if grep -q '^protected_modules = ' common/modules.bzl 2>/dev/null; then
             sed -i 's/protected_modules = \[.*\]/protected_modules = []/' common/modules.bzl
           fi
-          ( cd common && git add -A && git commit -q -m "remove protected exports" || true )
+          ( cd common && git add -A && git commit -q -m "Wild: remove protected exports" || true )
 
-      # ─────────────────────────────────────────────────
-      # 5. BUILD WITH BAZEL/KLEAF
-      # ─────────────────────────────────────────────────
-      - name: 🏗️ Build kernel (tools/bazel run dist)
+      - name: Build kernel with Kleaf
         run: |
           cd kernel_workspace
           mkdir -p dist
@@ -350,34 +384,10 @@ jobs:
           fi
 
           echo "DIST_DIR=$(pwd)/dist" >> "$GITHUB_ENV"
-          echo "Build done ✓"
+          echo "Build done"
           ls -lah dist
 
-      - name: 🚜 Patch kernel Image for KPM (patch_linux)
-        if: ${{ inputs.ENABLE_KPM }}
-        run: |
-          cd kernel_workspace/dist
-          if [ ! -f Image ]; then
-            echo "::error::dist/Image not found — cannot apply KPM patch"
-            ls -lah
-            exit 1
-          fi
-          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU_patch/main/kpm/patch_linux" -o patch_linux
-          chmod +x patch_linux
-          ./patch_linux
-          if [ ! -f oImage ]; then
-            echo "::error::patch_linux did not produce oImage"
-            ls -lah
-            exit 1
-          fi
-          rm -f Image
-          mv oImage Image
-          rm -f patch_linux
-          echo "KPM patch applied to dist/Image ✓"
-      # ─────────────────────────────────────────────────
-      # 6. PACKAGE ANYKERNEL3
-      # ─────────────────────────────────────────────────
-      - name: 📦 Package with AnyKernel3
+      - name: Package with AnyKernel3
         run: |
           git clone --depth=1 -b gki-2.0 https://github.com/WildKernels/AnyKernel3.git AnyKernel3
           rm -rf AnyKernel3/.git
@@ -389,7 +399,7 @@ jobs:
           done
 
           if [ -z "$IMAGE" ]; then
-            echo "::error::No kernel image found in dist:"
+            echo "::error::No kernel image found in dist"
             find "$DIST" -maxdepth 1 -type f | sort
             exit 1
           fi
@@ -402,7 +412,7 @@ jobs:
           ## osm0sis @ xda-developers
 
           properties() { '
-          kernel.string=SukiSU Ultra | SUSFS v2.1.0 | BBG | Xiaomi 14T Pro (rothko) | GKI 6.1
+          kernel.string=KernelSU-Next | SUSFS v2.1.0 | BBG | DroidSpaces | Xiaomi 14T Pro (rothko) | GKI 6.1
           do.devicecheck=0
           do.modules=0
           do.systemless=0
@@ -438,26 +448,23 @@ jobs:
           ANYKERNEL
 
           BUILD_DATE=$(date +"%Y%m%d-%H%M")
-          ZIP_NAME="SukiSU-Ultra_Xiaomi14TPro_GKI6.1.138_${BUILD_DATE}.zip"
+          ZIP_NAME="KernelSU-Next_Wild_Xiaomi14TPro_GKI6.1.138_${BUILD_DATE}.zip"
           cd AnyKernel3
           zip -r9 "../${ZIP_NAME}" . -x "*.git*" -x "*.github*" -x "LICENCE" -x "README.md"
           cd ..
           echo "ZIP_NAME=${ZIP_NAME}" >> "$GITHUB_ENV"
           echo "ZIP_PATH=$(pwd)/${ZIP_NAME}" >> "$GITHUB_ENV"
           echo "BUILD_DATE=${BUILD_DATE}" >> "$GITHUB_ENV"
-          echo "AnyKernel3 zip: ${ZIP_NAME} ✓"
+          echo "AnyKernel3 zip: ${ZIP_NAME}"
 
-      # ─────────────────────────────────────────────────
-      # 7. UPLOAD ARTIFACTS / RELEASE
-      # ─────────────────────────────────────────────────
-      - name: 📤 Upload AnyKernel3 (flashable, no nested zip)
+      - name: Upload AnyKernel3 flashable
         uses: actions/upload-artifact@v4
         with:
-          name: AnyKernel3-Xiaomi14TPro-GKI6.1.138-${{ env.BUILD_DATE }}
+          name: AnyKernel3-Xiaomi14TPro-Wild-KSUN-${{ env.BUILD_DATE }}
           path: AnyKernel3/*
           retention-days: 7
 
-      - name: 📤 Upload boot images (fastboot)
+      - name: Upload boot images
         uses: actions/upload-artifact@v4
         with:
           name: boot-images-${{ env.BUILD_DATE }}
@@ -469,14 +476,14 @@ jobs:
             build.log
           retention-days: 7
 
-      - name: 🏷️ Create GitHub Release
+      - name: Create GitHub Release
         if: ${{ inputs.UPLOAD_RELEASE }}
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: "gki-v6.1.138-${{ env.BUILD_DATE }}"
-          name: "SukiSU Ultra GKI | Xiaomi 14T Pro | ${{ env.BUILD_DATE }}"
+          tag_name: "wild-ksun-gki-v6.1.138-${{ env.BUILD_DATE }}"
+          name: "KernelSU-Next Wild GKI | Xiaomi 14T Pro | ${{ env.BUILD_DATE }}"
           body: |
-            ## Xiaomi 14T Pro Kernel — GKI 6.1.138 (clean Google ACK + Kleaf)
+            ## Xiaomi 14T Pro Kernel - Wild KernelSU-Next GKI 6.1.138
 
             **Device:** Xiaomi 14T Pro (rothko)  
             **Build system:** Bazel/Kleaf from Android Common Kernel  
@@ -484,13 +491,18 @@ jobs:
             **Kleaf target:** `${{ github.event.inputs.KLEAF_TARGET }}`
 
             ### Features
-            - SukiSU Ultra pinned to 40796 (`0ca744a88835`)
+            - KernelSU-Next (`dev-susfs`)
             - SUSFS v2.1+
-            - KPM (`CONFIG_KPM=y` + patched `Image` via `patch_linux`)
             - Baseband Guard
             - DroidSpaces-OSS
-            - BBR + FQ
-            - WireGuard
+            - WildKernels branding: `6.1.138-android14-Wild`
+            - WildKernels module version bypass for vendor modules
+            - Networking FULL: ipset, BBR, FQ, FQ_CODEL, WireGuard
+            - ZRAM + ZSTD
+            - NTFS3 + ExFAT
+            - MGLRU
+            - DAMON
+            - TEO idle governor
 
             > GKI image. Flash on Xiaomi 14T Pro (rothko) only.
           files: |
@@ -501,11 +513,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # ─────────────────────────────────────────────────
-      # 8. CLEANUP
-      # ─────────────────────────────────────────────────
-      - name: 🧹 Clean up self-hosted runner
+      - name: Clean up self-hosted runner
         if: always()
         run: |
           rm -rf AnyKernel3 *.zip /tmp/susfs4ksu /tmp/sukisu_setup.sh || true
-          echo "Runner cleaned ✓"
+          echo "Runner cleaned"
