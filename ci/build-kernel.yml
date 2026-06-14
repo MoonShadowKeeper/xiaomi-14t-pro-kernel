@@ -295,7 +295,8 @@ jobs:
       # ─────────────────────────────────────────────────
       - name: 📦 Package with AnyKernel3
         run: |
-          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AnyKernel3
+          git clone --depth=1 -b gki-2.0 https://github.com/WildKernels/AnyKernel3.git AnyKernel3
+          rm -rf AnyKernel3/.git
 
           DIST="kernel_workspace/dist"
           IMAGE=""
@@ -313,26 +314,43 @@ jobs:
           [ -f "$DIST/dtbo.img" ] && cp "$DIST/dtbo.img" AnyKernel3/ || true
 
           cat > AnyKernel3/anykernel.sh <<'ANYKERNEL'
-          ## AnyKernel3 Ramdisk Mod Script
+          ### AnyKernel3 Ramdisk Mod Script
+          ## osm0sis @ xda-developers
+
           properties() { '
-          kernel.string=SukiSU Ultra | Xiaomi 14T Pro (rothko) | GKI 6.1.138
-          do.devicecheck=1
+          kernel.string=SukiSU Ultra | SUSFS v2.1.0 | BBG | Xiaomi 14T Pro (rothko) | GKI 6.1
+          do.devicecheck=0
           do.modules=0
-          do.systemless=1
+          do.systemless=0
           do.cleanup=1
           do.cleanuponabort=0
+          do.check_boot_version=0
           device.name1=rothko
           device.name2=xiaomi14tpro
+          device.name3=
+          device.name4=
+          device.name5=
           supported.versions=
           supported.patchlevels=
-          '; }
-          block=boot;
-          is_slot_device=1;
-          ramdisk_compression=auto;
-          patch_vbmeta_flag=auto;
-          . tools/ak3-core.sh;
-          dump_boot;
-          write_boot;
+          supported.vendorpatchlevels=
+          '; } # end properties
+
+          block=boot
+          is_slot_device=auto
+          ramdisk_compression=auto
+          patch_vbmeta_flag=auto
+          no_magisk_check=1
+
+          . tools/ak3-core.sh
+
+          split_boot
+
+          if [ -f "$SPLITIMG/ramdisk.cpio" ]; then
+              unpack_ramdisk
+              write_boot
+          else
+              flash_boot
+          fi
           ANYKERNEL
 
           BUILD_DATE=$(date +"%Y%m%d-%H%M")
