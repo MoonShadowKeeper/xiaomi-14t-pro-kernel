@@ -51,7 +51,7 @@ runs:
         SKIP_VENDOR_BOOT=1 \
         SKIP_EXT_MODULES=1 \
         SKIP_CP_KERNEL_HDR=1 \
-        OUT_DIR="/home/runner/out" \
+        OUT_DIR="${HOME}/out" \
         LTO=thin \
         BUILD_CONFIG=common/build.config.gki.aarch64 \
         build/build.sh -j"$(nproc)" \
@@ -69,43 +69,43 @@ runs:
           tools/bazel run \
             --config=fast \
             --config=stamp \
-            --disk_cache=/home/runner/.cache/bazel \
+            --disk_cache=${HOME}/.cache/bazel \
             //common:kernel_aarch64_dist \
-            -- --destdir=/home/runner/out
+            -- --destdir=${HOME}/out
         else
           tools/bazel run \
             --config=fast \
             --config=stamp \
-            --disk_cache=/home/runner/.cache/bazel \
+            --disk_cache=${HOME}/.cache/bazel \
             //common:kernel_aarch64_dist \
-            -- --dist_dir=/home/runner/out
+            -- --dist_dir=${HOME}/out
         fi
       fi
 
-      cat /home/runner/out/common/.config || true
+      cat ${HOME}/out/common/.config || true
 
   - name: 'Gather Build Artifacts'
     shell: bash
     working-directory: ${{ github.workspace }}
     run: |
       set -euo pipefail
-      if [ -f "/home/runner/out/dist/Image" ]; then
-        echo "Found Image at /home/runner/out/dist/Image"
+      if [ -f "${HOME}/out/dist/Image" ]; then
+        echo "Found Image at ${HOME}/out/dist/Image"
         if [[ ${{ inputs.bypass }} == "true" ]]; then
-          cp "/home/runner/out/dist/Image" "${{ github.workspace }}/AnyKernel3/Bypass-Image"
+          cp "${HOME}/out/dist/Image" "${{ github.workspace }}/AnyKernel3/Bypass-Image"
         else
-          cp "/home/runner/out/dist/Image" "${{ github.workspace }}/AnyKernel3/Image"
+          cp "${HOME}/out/dist/Image" "${{ github.workspace }}/AnyKernel3/Image"
           echo "Kernel Version:"
-          strings "/home/runner/out/dist/Image" | grep -m1 "^Linux version "
+          strings "${HOME}/out/dist/Image" | grep -m1 "^Linux version "
         fi
           exit 0
         fi
-      if [ -f "/home/runner/out/Image" ]; then
-        echo "Found Image at /home/runner/out/Image"
+      if [ -f "${HOME}/out/Image" ]; then
+        echo "Found Image at ${HOME}/out/Image"
         if [[ ${{ inputs.bypass }} == "true" ]]; then
-          cp "/home/runner/out/Image" "${{ github.workspace }}/AnyKernel3/Bypass-Image"
+          cp "${HOME}/out/Image" "${{ github.workspace }}/AnyKernel3/Bypass-Image"
         else
-          cp "/home/runner/out/Image" "${{ github.workspace }}/AnyKernel3/Image"
+          cp "${HOME}/out/Image" "${{ github.workspace }}/AnyKernel3/Image"
         fi
         exit 0
       fi

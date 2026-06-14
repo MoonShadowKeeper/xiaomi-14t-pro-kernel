@@ -41,7 +41,7 @@ runs:
         echo "✅ ccache binary verified: $(/usr/bin/ccache --version | head -1)"
         
         # Setup cache directories
-        export CCACHE_DIR="/home/runner/.ccache"
+        export CCACHE_DIR="${HOME}/.ccache"
         echo "CCACHE_DIR=$CCACHE_DIR" >> $GITHUB_ENV
         mkdir -p "$CCACHE_DIR"
 
@@ -97,7 +97,7 @@ runs:
       working-directory: ${{ github.workspace }}
       run: |
         set -euo pipefail
-        export BAZEL_CACHE_DIR="/home/runner/.cache/bazel"
+        export BAZEL_CACHE_DIR="${HOME}/.cache/bazel"
         mkdir -p "$BAZEL_CACHE_DIR"
         
         # Set bazel disk cache size limit to 8GB
@@ -112,7 +112,7 @@ runs:
       working-directory: ${{ github.workspace }}
       run: |
         set -euo pipefail
-        export LDCACHE_DIR="/home/runner/.ld_cache"
+        export LDCACHE_DIR="${HOME}/.ld_cache"
         echo "LDCACHE_DIR=$LDCACHE_DIR" >> $GITHUB_ENV
         mkdir -p "$LDCACHE_DIR"
           
