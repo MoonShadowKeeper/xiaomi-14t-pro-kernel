@@ -37,6 +37,7 @@ env:
   SUKISU_BRANCH: "susfs-main"
   SUSFS_REPO: "simonpunk/susfs4ksu"
   TZ: "UTC"
+  HOME: "/root"
 
 jobs:
   build:
