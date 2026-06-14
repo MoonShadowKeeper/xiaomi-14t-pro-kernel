@@ -196,6 +196,27 @@ jobs:
           fi
           echo "Baseband Guard integrated ✓"
 
+
+      - name: 🧩 DroidSpaces-OSS (WildKernels style)
+        run: |
+          cd kernel_workspace
+          rm -rf Droidspaces-OSS
+          git clone --depth=1 https://github.com/ravindu644/Droidspaces-OSS.git
+          cd common
+          cp ../Droidspaces-OSS/Documentation/resources/kernel-patches/GKI/below-kernel-6.12/001.GKI-below-6.12-fix_sysvipc_kabi_6_7_8.patch ./
+          patch -p1 < 001.GKI-below-6.12-fix_sysvipc_kabi_6_7_8.patch
+          cat >> arch/arm64/configs/gki_defconfig <<'EOF'
+          CONFIG_PID_NS=y
+          CONFIG_SYSVIPC=y
+          CONFIG_POSIX_MQUEUE=y
+          CONFIG_IPC_NS=y
+          CONFIG_DEVTMPFS=y
+          CONFIG_BINFMT_MISC=y
+          CONFIG_BINFMT_SCRIPT=y
+          CONFIG_BINFMT_ELF=y
+          EOF
+          git add -A && git commit -q -m "DroidSpaces-OSS" || true
+
       # ─────────────────────────────────────────────────
       # 4. FEATURE CONFIG FRAGMENT
       # ─────────────────────────────────────────────────
@@ -218,34 +239,10 @@ jobs:
           CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
           CONFIG_BBG=y
           CONFIG_LSM="landlock,lockdown,yama,loadpin,safesetid,integrity,selinux,smack,tomoyo,apparmor,bpf,baseband_guard"
-          CONFIG_TMPFS_XATTR=y
-          CONFIG_TMPFS_POSIX_ACL=y
-          CONFIG_KPM=y
-          CONFIG_KALLSYMS=y
-          CONFIG_KALLSYMS_ALL=y
           CONFIG_TCP_CONG_BBR=y
           CONFIG_NET_SCH_FQ=y
           CONFIG_DEFAULT_TCP_CONG="bbr"
           CONFIG_WIREGUARD=y
-          CONFIG_ZRAM=m
-          CONFIG_ZRAM_DEF_COMP_ZSTD=y
-          CONFIG_ZRAM_DEF_COMP="zstd"
-          CONFIG_CRYPTO_ZSTD=y
-          CONFIG_ZSMALLOC=m
-          CONFIG_NTFS3_FS=y
-          CONFIG_NTFS3_LZX_XPRESS=y
-          CONFIG_NTFS3_FS_POSIX_ACL=y
-          CONFIG_EXFAT_FS=y
-          CONFIG_LRU_GEN=y
-          CONFIG_LRU_GEN_ENABLED=y
-          CONFIG_LRU_GEN_STATS=y
-          CONFIG_DAMON=y
-          CONFIG_DAMON_VADDR=y
-          CONFIG_DAMON_PADDR=y
-          CONFIG_DAMON_SYSFS=y
-          CONFIG_DAMON_RECLAIM=y
-          CONFIG_DAMON_LRU_SORT=y
-          CONFIG_CPU_IDLE_GOV_TEO=y
           EOF
 
           echo "Appended feature configs to $DEFCFG"
