@@ -331,8 +331,8 @@ jobs:
           ramdisk_compression=auto;
           patch_vbmeta_flag=auto;
           . tools/ak3-core.sh;
-          . split_img;
-          . flash_boot;
+          dump_boot;
+          write_boot;
           ANYKERNEL
 
           BUILD_DATE=$(date +"%Y%m%d-%H%M")
