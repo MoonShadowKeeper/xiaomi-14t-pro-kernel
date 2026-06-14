@@ -131,8 +131,8 @@ jobs:
         GKI_VERSION: ${{ env.GKI_VERSION }}
       run: |
         cd ~/kernel_workspace
-        # Use LTO=none to prevent OOM on 16GB VPS
-        LTO=none tools/bazel run //common:kernel_aarch64_dist -- --dist_dir="$(pwd)/out/dist"
+        # The user requested to try with LTO=thin despite 16GB RAM limit
+        LTO=thin tools/bazel run //common:kernel_aarch64_dist -- --dist_dir="$(pwd)/out/dist"
 
     - name: Package with AnyKernel3
       env:
