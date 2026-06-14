@@ -49,9 +49,10 @@ jobs:
       # ─────────────────────────────────────────────────
       # 1. SELF-HOSTED RUNNER SETUP
       # ─────────────────────────────────────────────────
-      - name: 🧹 Clean workspace
+      - name: 🧹 Clean build artifacts (keep kernel_workspace cache)
         run: |
-          rm -rf kernel_workspace AnyKernel3 *.zip build.log || true
+          # Keep kernel_workspace between runs for fast incremental repo sync.
+          rm -rf AnyKernel3 *.zip build.log || true
 
       - name: 🛠️ Ensure build dependencies
         run: |
@@ -86,10 +87,21 @@ jobs:
         run: |
           mkdir -p kernel_workspace
           cd kernel_workspace
-          repo init --depth=1 \
-            -u https://android.googlesource.com/kernel/manifest \
-            -b "${{ github.event.inputs.ACK_BRANCH }}"
-          repo sync -c -j"$(nproc)" --no-tags --fail-fast
+
+          if [ -d .repo ]; then
+            echo "Reusing cached workspace — resetting local changes (SukiSU/SUSFS/configs)"
+            repo forall -c 'git reset --hard -q; git clean -fdq' 2>/dev/null || true
+            repo init --depth=1 \
+              -u https://android.googlesource.com/kernel/manifest \
+              -b "${{ github.event.inputs.ACK_BRANCH }}"
+            repo sync -c -j"$(nproc)" --no-tags --force-sync --optimized-fetch
+          else
+            echo "Fresh workspace — full repo init + sync"
+            repo init --depth=1 \
+              -u https://android.googlesource.com/kernel/manifest \
+              -b "${{ github.event.inputs.ACK_BRANCH }}"
+            repo sync -c -j"$(nproc)" --no-tags --fail-fast
+          fi
 
           echo "Synced. Common kernel version:"
           head -5 common/Makefile || true
