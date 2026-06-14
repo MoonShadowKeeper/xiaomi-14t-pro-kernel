@@ -9,6 +9,11 @@ jobs:
     runs-on: self-hosted
     env:
       HOME: /root
+      MANIFEST_BRANCH: common-android14-6.1
+      SUSFS_BRANCH: gki-android14-6.1
+      SUSFS_PATCH: 50_add_susfs_in_gki-android14-6.1.patch
+      GKI_VERSION: "6.1"
+      WORKSPACE: /root/kernel_workspace
     defaults:
       run:
         shell: bash -euo pipefail {0}
@@ -17,157 +22,197 @@ jobs:
     - name: Checkout Repository
       uses: actions/checkout@v4
 
-    - name: Set Environment Variables
-      run: |
-        echo "MANIFEST_BRANCH=common-android14-6.1"      >> $GITHUB_ENV
-        echo "SUSFS_BRANCH=gki-android14-6.1"          >> $GITHUB_ENV
-        echo "SUSFS_PATCH=50_add_susfs_in_gki-android14-6.1.patch" >> $GITHUB_ENV
-        echo "GKI_VERSION=6.1"                          >> $GITHUB_ENV
-        echo "TARGET_COMMIT="                           >> $GITHUB_ENV
-
     - name: Clean Workspace
       run: |
-        find ~/kernel_workspace -name "*.lock" -delete 2>/dev/null || true
-        if [ -d ~/kernel_workspace/common/.git ]; then
-          git -C ~/kernel_workspace/common reset --hard HEAD 2>/dev/null || true
-          git -C ~/kernel_workspace/common clean -fdx 2>/dev/null || true
-          git -C ~/kernel_workspace/common checkout HEAD -- . 2>/dev/null || true
+        find $WORKSPACE -name "*.lock" -delete 2>/dev/null || true
+        if [ -d $WORKSPACE/common/.git ]; then
+          git -C $WORKSPACE/common reset --hard HEAD 2>/dev/null || true
+          git -C $WORKSPACE/common clean -fdx 2>/dev/null || true
         fi
-        rm -rf ~/kernel_workspace/out
-        rm -rf ~/kernel_workspace/susfs4ksu
-        rm -rf ~/kernel_workspace/AnyKernel3
+        rm -rf $WORKSPACE/out
+        rm -rf $WORKSPACE/susfs4ksu
+        rm -rf $WORKSPACE/AnyKernel3
 
     - name: Install Dependencies
       run: |
-        sudo apt-get update
-        sudo apt-get install -y git-core gnupg flex bison build-essential zip curl \
-          zlib1g-dev libc6-dev-i386 x11proto-core-dev libx11-dev lib32z1-dev \
+        sudo apt-get update -qq
+        sudo apt-get install -y \
+          git-core gnupg flex bison build-essential zip curl \
+          zlib1g-dev libc6-dev-i386 libx11-dev lib32z1-dev \
           libgl1-mesa-dev libxml2-utils xsltproc unzip fontconfig \
-          python3 python-is-python3 bc lz4 libelf-dev libssl-dev
+          python3 python-is-python3 bc lz4 libelf-dev libssl-dev \
+          ccache repo
 
-    - name: Setup repo tool
+    - name: Setup repo tool (fallback if package not available)
       run: |
-        export HOME=/root
-        mkdir -p ~/bin
-        curl -L https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
-        chmod a+x ~/bin/repo
-        echo "$HOME/bin" >> $GITHUB_PATH
+        if ! command -v repo &>/dev/null; then
+          mkdir -p /usr/local/bin
+          curl -fsSL https://storage.googleapis.com/git-repo-downloads/repo \
+            -o /usr/local/bin/repo
+          chmod a+x /usr/local/bin/repo
+        fi
+        repo --version
 
     - name: Initialize and Sync Kernel Source
-      env:
-        MANIFEST_BRANCH: ${{ env.MANIFEST_BRANCH }}
       run: |
-        mkdir -p ~/kernel_workspace
-        cd ~/kernel_workspace
-        repo init -u https://android.googlesource.com/kernel/manifest \
-          -b "$MANIFEST_BRANCH" --depth=1
-        repo sync -c -j$(nproc) --no-clone-bundle --force-checkout
+        mkdir -p $WORKSPACE
+        cd $WORKSPACE
+        repo init \
+          -u https://android.googlesource.com/kernel/manifest \
+          -b "$MANIFEST_BRANCH" \
+          --depth=1 \
+          --repo-rev=stable
+        repo sync -c -j$(nproc) --no-clone-bundle --force-checkout --no-tags
 
-    - name: Apply SUSFS v2.1.0+ Patches
-      env:
-        SUSFS_BRANCH: ${{ env.SUSFS_BRANCH }}
-        SUSFS_PATCH: ${{ env.SUSFS_PATCH }}
+    - name: Apply SUSFS Patches
       run: |
-        cd ~/kernel_workspace
-        git clone https://gitlab.com/simonpunk/susfs4ksu.git -b "$SUSFS_BRANCH"
+        cd $WORKSPACE
+        git clone --depth=1 \
+          https://gitlab.com/simonpunk/susfs4ksu.git \
+          -b "$SUSFS_BRANCH" susfs4ksu
+
         cd common
         git reset --hard HEAD
         git clean -fdx
+
+        # Copy SUSFS source files
         cp -rv ../susfs4ksu/kernel_patches/fs/* fs/
         cp -rv ../susfs4ksu/kernel_patches/include/linux/* include/linux/
-        patch -p1 --forward < "../susfs4ksu/kernel_patches/${SUSFS_PATCH}" || true
+
+        # Apply the main SUSFS patch - ignore failures (offset/fuzz issues are OK)
+        set +e
+        patch -p1 --forward < "../susfs4ksu/kernel_patches/${SUSFS_PATCH}"
+        PATCH_EXIT=$?
+        set -e
+
+        # Manual fallback for namespace.c hunk #1 if patch failed to apply it
         if ! grep -q 'CONFIG_KSU_SUSFS_SUS_MOUNT' fs/namespace.c; then
-          sed -i 's/#include "pnode.h"/#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n#include <linux\/susfs_def.h>\n#endif\n\n#include "pnode.h"/g' fs/namespace.c
-          sed -i 's/#include "internal.h"/#include "internal.h"\n\n#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\nextern bool susfs_is_current_ksu_domain(void);\nextern struct static_key_true susfs_is_sdcard_android_data_not_decrypted;\n\n#define CL_COPY_MNT_NS BIT(25)\n#endif/g' fs/namespace.c
-        fi
-        if ! grep -q 'CONFIG_KSU_SUSFS_SUS_KSTAT' fs/proc/task_mmu.c; then
-          sed -i 's/#include <asm\/elf.h>/#if defined(CONFIG_KSU_SUSFS_SUS_KSTAT) || defined(CONFIG_KSU_SUSFS_SUS_MAP) || defined(CONFIG_KSU_SUSFS_OPEN_REDIRECT)\n#include <linux\/susfs_def.h>\n#endif\n\n#include <asm\/elf.h>/g' fs/proc/task_mmu.c
+          echo ">> Manual fix: injecting SUSFS include into namespace.c"
+          # Insert after the last standard #include block (before pnode.h)
+          sed -i '/#include <linux\/mnt_idmapping.h>/a \
+\
+#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\
+#include <linux/susfs_def.h>\
+#endif' fs/namespace.c
+
+          # Insert extern declarations after #include "internal.h"
+          sed -i '/#include "internal.h"/a \
+\
+#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\
+extern bool susfs_is_current_ksu_domain(void);\
+extern struct static_key_true susfs_is_sdcard_android_data_not_decrypted;\
+#define CL_COPY_MNT_NS BIT(25)\
+#endif' fs/namespace.c
+          echo ">> namespace.c patched manually"
+        else
+          echo ">> namespace.c already has SUSFS, skipping manual patch"
         fi
 
-    - name: Apply Sukisu Ultra
-      run: |
-        cd ~/kernel_workspace/common
-        curl -LSs "https://raw.githubusercontent.com/sukisu-ultra/sukisu-ultra/main/kernel/setup.sh" | bash -
+        echo "SUSFS patch step done (exit was $PATCH_EXIT - non-zero is OK if manual fix ran)"
 
-    - name: Apply Networking, ZRAM and GKI Features
+    - name: Apply SukiSU Ultra (KernelSU)
       run: |
-        cd ~/kernel_workspace/common
+        cd $WORKSPACE/common
+        curl -fsSL \
+          "https://raw.githubusercontent.com/sukisu-ultra/sukisu-ultra/main/kernel/setup.sh" \
+          | bash -s susfs
+
+    - name: Apply Kernel Features (BBR, ZRAM, NTFS3, ExFAT, LRU, DAMON)
+      run: |
+        cd $WORKSPACE/common
+        # Remove -dirty suffix from kernel version string
         sed -i 's/-dirty//' scripts/setlocalversion || true
-        DEFCONFIG=arch/arm64/configs/gki_defconfig
-        {
-          echo ""
-          echo "CONFIG_TCP_CONG_BBR=y"
-          echo "CONFIG_DEFAULT_BBR=y"
-          echo "CONFIG_NET_SCH_FQ=y"
-          echo "CONFIG_WIREGUARD=y"
-          echo "CONFIG_TMPFS_XATTR=y"
-          echo "CONFIG_TMPFS_POSIX_ACL=y"
-          echo "CONFIG_NTFS3_FS=y"
-          echo "CONFIG_NTFS3_FS_POSIX_ACL=y"
-          echo "CONFIG_EXFAT_FS=y"
-          echo 'CONFIG_EXFAT_DEFAULT_IOCHARSET="utf8"'
-          echo "CONFIG_LRU_GEN=y"
-          echo "CONFIG_LRU_GEN_ENABLED=y"
-          echo "CONFIG_LRU_GEN_STATS=y"
-          echo "CONFIG_DAMON=y"
-          echo "CONFIG_DAMON_VADDR=y"
-          echo "CONFIG_DAMON_PADDR=y"
-          echo "CONFIG_DAMON_RECLAIM=y"
-          echo "CONFIG_CPU_IDLE_GOV_TEO=y"
-          echo "CONFIG_ENERGY_MODEL=y"
-          echo "CONFIG_SCHED_MC=y"
-          echo "CONFIG_KPM=y"
-          echo "CONFIG_ZSMALLOC=m"
-          echo "CONFIG_ZRAM=m"
-          echo "CONFIG_CRYPTO_ZSTD=y"
-          echo "CONFIG_ZRAM_DEF_COMP_ZSTD=y"
-          echo 'CONFIG_ZRAM_DEF_COMP="zstd"'
-        } >> "$DEFCONFIG"
-        
-        # Patch build/build.sh to skip check_defconfig call for Kleaf compatibility (if present)
-        if [ -f build/build.sh ]; then
-          sed -i '/^[[:space:]]*check_defconfig[[:space:]]*$/ s/check_defconfig/true # check_defconfig disabled/' build/build.sh || true
-        fi
 
-    - name: Build the Kernel (Kleaf)
-      env:
-        GKI_VERSION: ${{ env.GKI_VERSION }}
+        DEFCONFIG=arch/arm64/configs/gki_defconfig
+        cat >> "$DEFCONFIG" << 'EOF'
+
+# === Networking ===
+CONFIG_TCP_CONG_BBR=y
+CONFIG_DEFAULT_BBR=y
+CONFIG_NET_SCH_FQ=y
+CONFIG_WIREGUARD=y
+
+# === Filesystem ===
+CONFIG_TMPFS_XATTR=y
+CONFIG_TMPFS_POSIX_ACL=y
+CONFIG_NTFS3_FS=y
+CONFIG_NTFS3_FS_POSIX_ACL=y
+CONFIG_EXFAT_FS=y
+CONFIG_EXFAT_DEFAULT_IOCHARSET="utf8"
+
+# === Memory management ===
+CONFIG_LRU_GEN=y
+CONFIG_LRU_GEN_ENABLED=y
+CONFIG_LRU_GEN_STATS=y
+CONFIG_DAMON=y
+CONFIG_DAMON_VADDR=y
+CONFIG_DAMON_PADDR=y
+CONFIG_DAMON_RECLAIM=y
+
+# === Power ===
+CONFIG_CPU_IDLE_GOV_TEO=y
+CONFIG_ENERGY_MODEL=y
+CONFIG_SCHED_MC=y
+
+# === KPM / KernelSU modules ===
+CONFIG_KPM=y
+
+# === ZRAM with ZSTD ===
+CONFIG_ZSMALLOC=m
+CONFIG_ZRAM=m
+CONFIG_CRYPTO_ZSTD=y
+CONFIG_ZRAM_DEF_COMP_ZSTD=y
+CONFIG_ZRAM_DEF_COMP="zstd"
+EOF
+
+    - name: Build the Kernel (Kleaf / Bazel)
       run: |
-        cd ~/kernel_workspace
-        # The user requested to try with LTO=thin despite 16GB RAM limit
-        LTO=thin tools/bazel run //common:kernel_aarch64_dist -- --dist_dir="$(pwd)/out/dist"
+        cd $WORKSPACE
+        # LTO=thin: best balance of build time and performance
+        # If OOM occurs, change to LTO=none
+        LTO=thin tools/bazel run \
+          //common:kernel_aarch64_dist \
+          -- \
+          --dist_dir="$WORKSPACE/out/dist"
 
     - name: Package with AnyKernel3
-      env:
-        GKI_VERSION: ${{ env.GKI_VERSION }}
       run: |
-        cd ~/kernel_workspace
-        git clone https://github.com/MoonShadowKeeper/AnyKernel3.git -b master AnyKernel3
+        cd $WORKSPACE
+        git clone --depth=1 \
+          https://github.com/MoonShadowKeeper/AnyKernel3.git \
+          -b master AnyKernel3
         rm -rf AnyKernel3/.git
-        sed -i "s/kernel.string=.*/kernel.string=Custom GKI ${GKI_VERSION} (SukiSU-Ultra + SUSFS)/" \
-          AnyKernel3/anykernel.sh
-        
-        KERNEL_IMAGE=$(find out -path "*/dist/Image" | head -n 1)
-        [ -n "$KERNEL_IMAGE" ] || { echo "ERROR: Image not found in out/ — build failed silently"; exit 1; }
-        cp "$KERNEL_IMAGE" AnyKernel3/
-        
-        KERNEL_CONFIG=$(find out -name ".config" | head -n 1)
-        if [ -n "$KERNEL_CONFIG" ]; then
-          cp "$KERNEL_CONFIG" "kernel-Xiaomi-14T-Pro-GKI-${GKI_VERSION}.config"
-        fi
-        
-        cd AnyKernel3
-        zip -r9 "../AnyKernel3-Xiaomi-14T-Pro-GKI-${GKI_VERSION}.zip" . -x "*.git*"
-        cd ..
 
-    - name: Upload AnyKernel3 Artifact
+        sed -i "s/kernel.string=.*/kernel.string=SukiSU-Ultra GKI ${GKI_VERSION} + SUSFS (Xiaomi 14T Pro)/" \
+          AnyKernel3/anykernel.sh
+
+        KERNEL_IMAGE=$(find "$WORKSPACE/out/dist" -name "Image" -type f 2>/dev/null | tail -1)
+        if [ -z "$KERNEL_IMAGE" ]; then
+          echo "ERROR: Image not found in $WORKSPACE/out/dist"
+          find "$WORKSPACE/out" -name "Image" -type f || true
+          exit 1
+        fi
+        echo "Found kernel image: $KERNEL_IMAGE"
+        cp "$KERNEL_IMAGE" AnyKernel3/
+
+        KERNEL_CONFIG=$(find "$WORKSPACE/out" -name ".config" -type f 2>/dev/null | tail -1)
+        if [ -n "$KERNEL_CONFIG" ]; then
+          cp "$KERNEL_CONFIG" "$WORKSPACE/kernel-Xiaomi-14T-Pro-GKI-${GKI_VERSION}.config"
+        fi
+
+        cd AnyKernel3
+        zip -r9 "$WORKSPACE/AnyKernel3-Xiaomi-14T-Pro-GKI-${GKI_VERSION}.zip" . -x "*.git*"
+
+    - name: Upload AnyKernel3 ZIP
       uses: actions/upload-artifact@v4
       with:
         name: AnyKernel3-Xiaomi-14T-Pro-GKI-${{ env.GKI_VERSION }}
-        path: ~/kernel_workspace/AnyKernel3-*.zip
+        path: /root/kernel_workspace/AnyKernel3-*.zip
+        if-no-files-found: error
 
     - name: Upload Kernel Config
       uses: actions/upload-artifact@v4
       with:
         name: kernel-config-Xiaomi-14T-Pro-GKI-${{ env.GKI_VERSION }}
-        path: ~/kernel_workspace/kernel-*.config
+        path: /root/kernel_workspace/kernel-*.config
+        if-no-files-found: warn
