@@ -105,17 +105,20 @@ jobs:
         cp -rv ../susfs4ksu/kernel_patches/fs/* fs/
         cp -rv ../susfs4ksu/kernel_patches/include/linux/* include/linux/
 
+        # Apply the vendored SUSFS patch with Xiaomi 14T GKI context fixes.
+        patch -p1 --forward \
+          < "$GITHUB_WORKSPACE/patches/50_add_susfs_in_gki-android14-6.1-xiaomi14t.patch"
 
-        # Fix Hunk #1 if it didn't apply (script is idempotent — safe to always run)
-        python3 "$GITHUB_WORKSPACE/scripts/fix_susfs_namespace.py"
-
-        # Final verification: check for the specific include from hunk #1
-        # (not just CONFIG_KSU_SUSFS_SUS_MOUNT which hunks 2-9 also add)
+        # Final verification: check for the specific namespace.c SUSFS hooks.
         grep -q 'susfs_def.h' fs/namespace.c || {
-          echo "::error::susfs_def.h include missing from namespace.c — hunk #1 injection failed"
+          echo "::error::susfs_def.h include missing from namespace.c"
           exit 1
         }
-        echo "SUSFS patch step complete — susfs_def.h confirmed in namespace.c"
+        grep -q 'susfs_is_current_ksu_domain' fs/namespace.c || {
+          echo "::error::susfs namespace externs missing from namespace.c"
+          exit 1
+        }
+        echo "SUSFS patch step complete — vendored patch applied cleanly"
 
     - name: Apply SukiSU Ultra (KernelSU)
       run: |
