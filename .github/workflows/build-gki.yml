@@ -110,10 +110,10 @@ jobs:
         cp -rv ../susfs4ksu/kernel_patches/include/linux/* include/linux/
 
         # Apply the vendored SUSFS patch with Xiaomi 14T GKI context fixes.
-        patch -p1 --forward --dry-run \
-          < "$GITHUB_WORKSPACE/patches/50_add_susfs_in_gki-android14-6.1-xiaomi14t.patch"
-        patch -p1 --forward \
-          < "$GITHUB_WORKSPACE/patches/50_add_susfs_in_gki-android14-6.1-xiaomi14t.patch"
+        git apply --check --recount \
+          "$GITHUB_WORKSPACE/patches/50_add_susfs_in_gki-android14-6.1-xiaomi14t.patch"
+        git apply --recount \
+          "$GITHUB_WORKSPACE/patches/50_add_susfs_in_gki-android14-6.1-xiaomi14t.patch"
 
         # Final verification: check for the specific namespace.c SUSFS hooks.
         grep -q 'susfs_def.h' fs/namespace.c || {
