@@ -45,7 +45,7 @@ Device:                Xiaomi 14T Pro / rothko
 | **DroidSpaces-OSS** | ✅ | IPC / namespace совместимость для контейнерных сценариев |
 | **Wild branding** | ✅ | Версия ядра приводится к `6.1.138-android14-Wild` |
 | **Module version bypass** | ✅ | Vendor-модули грузятся даже при чувствительном vermagic |
-| **Networking FULL** | ✅ | ipset, netfilter extras, BBR, FQ, FQ_CODEL, WireGuard |
+| **Networking FULL** | ✅ | ipset, netfilter extras, BBR, FQ, FQ_CODEL, RFKILL |
 | **ZRAM + ZSTD** | ✅ | Более эффективный сжатый swap в RAM |
 | **NTFS3** | ✅ | Поддержка NTFS через in-kernel драйвер |
 | **ExFAT** | ✅ | Поддержка ExFAT-накопителей |
@@ -169,7 +169,7 @@ CONFIG_BINFMT_ELF=y
 
 ## Сеть
 
-Сетевой набор взят из WildKernels FULL и дополнен WireGuard:
+Сетевой набор взят из WildKernels FULL и дополнен RFKILL для vendor Wi-Fi/Bluetooth модулей:
 
 ```text
 CONFIG_IP_SET=y
@@ -186,12 +186,14 @@ CONFIG_DEFAULT_BBR=y
 CONFIG_DEFAULT_TCP_CONG="bbr"
 CONFIG_NET_SCH_FQ=y
 CONFIG_NET_SCH_FQ_CODEL=y
-CONFIG_WIREGUARD=y
+CONFIG_RFKILL=y
 ```
 
 **BBR + FQ** помогают держать стабильную скорость и задержку, особенно на мобильных сетях и Wi-Fi.
 
-**WireGuard** даёт поддержку VPN прямо в ядре.
+**RFKILL** даёт ядру стандартный radio-switch API. Его ждёт Xiaomi vendor `cfg80211.ko`; без него Wi-Fi/BT падают на `Unknown symbol rfkill_*`.
+
+WireGuard убран из baseline на время стабилизации Wi-Fi/BT. Его можно вернуть отдельным тестом позже.
 
 BBRv3 не добавлен: для GKI 6.1 он требует отдельные патчи и повышает риск конфликтов.
 
