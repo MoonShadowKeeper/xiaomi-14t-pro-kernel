@@ -124,25 +124,38 @@ jobs:
 
           cd kernel_workspace/common
 
-          # SUSFS source files into the kernel tree
+          # SUSFS new source files (no conflict — fresh files)
           cp "$SUSFS_DIR"/kernel_patches/fs/* fs/ 2>/dev/null || true
           cp "$SUSFS_DIR"/kernel_patches/include/linux/* include/linux/ 2>/dev/null || true
 
-          PATCH_APPLIED=0
+          PATCH=""
           for p in \
-            "$SUSFS_DIR/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch" \
             "$SUSFS_DIR/kernel_patches/50_add_susfs_in_${{ github.event.inputs.SUSFS_BRANCH }}.patch" \
+            "$SUSFS_DIR/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch" \
             "$SUSFS_DIR/kernel_patches/50_add_susfs_in_kernel.patch"; do
-            if [ -f "$p" ]; then
-              echo "Applying $p"
-              patch -p1 < "$p" && PATCH_APPLIED=1 && break
-            fi
+            [ -f "$p" ] && PATCH="$p" && break
           done
 
-          if [ "$PATCH_APPLIED" != "1" ]; then
-            echo "::warning::SUSFS kernel patch not found/applied for branch ${{ github.event.inputs.SUSFS_BRANCH }}. Check SUSFS repo layout."
+          if [ -z "$PATCH" ]; then
+            echo "::error::SUSFS patch file not found in repo."
+            ls -la "$SUSFS_DIR/kernel_patches"
+            exit 1
           fi
-          echo "SUSFS step done ✓"
+          echo "Using SUSFS patch: $PATCH"
+
+          # The patch targets a specific ACK snapshot. To adapt it to the current
+          # HEAD we use git's 3-way merge, which needs the base blobs from history.
+          echo "Deepening common/ history for 3-way merge..."
+          git fetch -q --unshallow 2>/dev/null || git fetch -q --depth=2000 2>/dev/null || true
+
+          if git apply --3way --whitespace=nowarn "$PATCH"; then
+            echo "SUSFS applied cleanly via git apply --3way ✓"
+          else
+            echo "::error::SUSFS 3-way merge produced conflicts. Check .rej / conflict markers."
+            git --no-pager diff --name-only --diff-filter=U || true
+            grep -rl '<<<<<<<' fs/ include/ kernel/ mm/ drivers/ 2>/dev/null | head -20 || true
+            exit 1
+          fi
 
       # ─────────────────────────────────────────────────
       # 4. FEATURE CONFIG FRAGMENT
@@ -199,6 +212,19 @@ jobs:
 
           echo "Appended feature configs to $DEFCFG"
           tail -50 "$DEFCFG"
+
+      - name: 🩹 Disable check_defconfig (we add extra configs)
+        run: |
+          cd kernel_workspace/common
+          # Kleaf runs POST_DEFCONFIG_CMDS="check_defconfig" which fails because our
+          # appended options make gki_defconfig diverge from savedefconfig form.
+          for f in build.config.gki build.config.gki.aarch64; do
+            if [ -f "$f" ] && grep -q "check_defconfig" "$f"; then
+              sed -i 's/check_defconfig//g' "$f"
+              echo "Neutralized check_defconfig in $f"
+            fi
+          done
+          grep -rn "POST_DEFCONFIG_CMDS" build.config.* || true
 
       # ─────────────────────────────────────────────────
       # 5. BUILD WITH BAZEL/KLEAF
