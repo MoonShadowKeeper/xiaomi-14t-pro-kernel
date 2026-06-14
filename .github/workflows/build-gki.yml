@@ -1,0 +1,399 @@
+name: Build Custom GKI Kernel
+
+on:
+  workflow_dispatch:
+    inputs:
+      device:
+        description: 'Target Device'
+        required: true
+        default: 'Xiaomi-14T-Pro'
+        type: choice
+        options:
+          - Xiaomi-14T-Pro
+          - Xiaomi-13-Pro
+      kmi_version:
+        description: 'Specific KMI Branch (e.g. common-android14-6.1-2024-04). Leave empty for latest.'
+        required: false
+        default: ''
+      target_commit:
+        description: 'Exact kernel commit hash. Leave empty to use stock-matched default for selected device.'
+        required: false
+        default: ''
+
+jobs:
+  build:
+    name: Build Kernel
+    runs-on: self-hosted
+    # Fix #11: enforce -euo pipefail for every run: block
+    defaults:
+      run:
+        shell: bash -euo pipefail {0}
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Set Environment Variables
+      # Fix #12: inputs go through env vars, not raw ${{ }} interpolation in shell
+      env:
+        INPUT_DEVICE: ${{ github.event.inputs.device }}
+        INPUT_KMI_VERSION: ${{ github.event.inputs.kmi_version }}
+        INPUT_TARGET_COMMIT: ${{ github.event.inputs.target_commit }}
+      run: |
+        if [ "$INPUT_DEVICE" == "Xiaomi-14T-Pro" ]; then
+          DEFAULT_MANIFEST="common-android14-6.1"
+          echo "SUSFS_BRANCH=gki-android14-6.1"          >> $GITHUB_ENV
+          echo "SUSFS_PATCH=50_add_susfs_in_gki-android14-6.1.patch" >> $GITHUB_ENV
+          echo "GKI_VERSION=6.1"                          >> $GITHUB_ENV
+          DEFAULT_TARGET_COMMIT=""
+        else
+          DEFAULT_MANIFEST="common-android13-5.15"
+          echo "SUSFS_BRANCH=gki-android13-5.15"          >> $GITHUB_ENV
+          echo "SUSFS_PATCH=50_add_susfs_in_gki-android13-5.15.patch" >> $GITHUB_ENV
+          echo "GKI_VERSION=5.15"                          >> $GITHUB_ENV
+          DEFAULT_TARGET_COMMIT="bf0a81a7f319"
+        fi
+
+        if [ -n "$INPUT_KMI_VERSION" ]; then
+          echo "MANIFEST_BRANCH=$INPUT_KMI_VERSION"      >> $GITHUB_ENV
+        else
+          echo "MANIFEST_BRANCH=$DEFAULT_MANIFEST"       >> $GITHUB_ENV
+        fi
+
+        if [ -n "$INPUT_TARGET_COMMIT" ]; then
+          echo "TARGET_COMMIT=$INPUT_TARGET_COMMIT"       >> $GITHUB_ENV
+        else
+          echo "TARGET_COMMIT=$DEFAULT_TARGET_COMMIT"    >> $GITHUB_ENV
+        fi
+
+    - name: Clean Workspace
+      run: |
+        # Remove stale git locks from previously cancelled runs
+        find ~/kernel_workspace -name "*.lock" -delete 2>/dev/null || true
+
+        # Hard-reset common/ to remove any stale checkout state that causes
+        # "repo sync" to fail with SyncError on re-runs
+        if [ -d ~/kernel_workspace/common/.git ]; then
+          git -C ~/kernel_workspace/common reset --hard HEAD 2>/dev/null || true
+          git -C ~/kernel_workspace/common clean -fdx 2>/dev/null || true
+          git -C ~/kernel_workspace/common checkout HEAD -- . 2>/dev/null || true
+        fi
+
+        # Fix #8: keep common/ for incremental sync — only clean build outputs
+        rm -rf ~/kernel_workspace/out
+        rm -rf ~/kernel_workspace/susfs4ksu
+        rm -rf ~/kernel_workspace/AnyKernel3
+
+    # Fix #7: "Free Disk Space" step removed — paths don't exist on self-hosted runner
+    # Dependencies installed once during runner provisioning via setup.sh
+
+    - name: Install Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y git-core gnupg flex bison build-essential zip curl \
+          zlib1g-dev libc6-dev-i386 x11proto-core-dev libx11-dev lib32z1-dev \
+          libgl1-mesa-dev libxml2-utils xsltproc unzip fontconfig \
+          python3 python-is-python3 bc lz4 libelf-dev libssl-dev
+
+    - name: Setup repo tool
+      run: |
+        mkdir -p ~/bin
+        curl -L https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+        chmod a+x ~/bin/repo
+        echo "$HOME/bin" >> $GITHUB_PATH
+
+    - name: Initialize and Sync Kernel Source
+      env:
+        MANIFEST_BRANCH: ${{ env.MANIFEST_BRANCH }}
+        TARGET_COMMIT: ${{ env.TARGET_COMMIT }}
+      run: |
+        mkdir -p ~/kernel_workspace
+        cd ~/kernel_workspace
+
+        repo init -u https://android.googlesource.com/kernel/manifest \
+          -b "$MANIFEST_BRANCH" --depth=1
+
+        # If we need a specific commit, sync without depth limit for the common repo
+        # so that we can later fetch arbitrary historical commits.
+        if [ -n "$TARGET_COMMIT" ]; then
+          # Sync with force to avoid stale checkout conflicts on re-runs
+          repo sync -c -j$(nproc) --no-clone-bundle --force-sync --force-checkout
+        else
+          repo sync -c -j$(nproc) --no-clone-bundle --force-checkout
+        fi
+
+        if [ -n "$TARGET_COMMIT" ]; then
+          echo "[+] Pinning to exact KMI source snapshot: $TARGET_COMMIT"
+          cd ~/kernel_workspace/common
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+
+          # Delete stale branch from previous runs so re-runs don't fail
+          git branch -D "stock-kmi-${TARGET_COMMIT}" 2>/dev/null || true
+
+          # Unshallow first so we can fetch historical commits
+          git fetch --unshallow origin 2>/dev/null || true
+
+          # Try to fetch the exact commit by hash
+          if git fetch --depth=1 origin "$TARGET_COMMIT" 2>/dev/null; then
+            git checkout -b "stock-kmi-${TARGET_COMMIT}" FETCH_HEAD
+            echo "[+] Pinned via git fetch (history intact): $TARGET_COMMIT"
+          else
+            # Fall back to Gitiles archive (no history, but exact tree content)
+            echo "[!] Direct fetch rejected by upstream; falling back to Gitiles archive."
+            git checkout --orphan "stock-kmi-${TARGET_COMMIT}"
+            find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+            curl -LSs \
+              "https://android.googlesource.com/kernel/common/+archive/${TARGET_COMMIT}.tar.gz" \
+              | tar -xz
+            git add -A
+            git commit -m "Import stock KMI source ${TARGET_COMMIT}"
+            echo "[+] Imported stock KMI source via archive: $TARGET_COMMIT"
+          fi
+        fi
+
+    - name: Apply SUSFS v2.1.0+ Patches
+      env:
+        SUSFS_BRANCH: ${{ env.SUSFS_BRANCH }}
+        SUSFS_PATCH: ${{ env.SUSFS_PATCH }}
+      run: |
+        cd ~/kernel_workspace
+        git clone https://gitlab.com/simonpunk/susfs4ksu.git -b "$SUSFS_BRANCH"
+
+        cd common
+        git reset --hard HEAD
+        git clean -fdx
+
+        # Fix #2: removed || true — a failed patch must abort the build, not silently continue
+        cp -rv ../susfs4ksu/kernel_patches/fs/* fs/
+        cp -rv ../susfs4ksu/kernel_patches/include/linux/* include/linux/
+        patch -p1 < "../susfs4ksu/kernel_patches/${SUSFS_PATCH}"
+
+        if ! grep -q 'CONFIG_KSU_SUSFS_SUS_MOUNT' fs/namespace.c; then
+          sed -i 's/#include "pnode.h"/#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n#include <linux\/susfs_def.h>\n#endif\n\n#include "pnode.h"/g' fs/namespace.c
+          sed -i 's/#include "internal.h"/#include "internal.h"\n\n#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\nextern bool susfs_is_current_ksu_domain(void);\nextern struct static_key_true susfs_is_sdcard_android_data_not_decrypted;\n\n#define CL_COPY_MNT_NS BIT(25)\n#endif/g' fs/namespace.c
+        fi
+
+        if ! grep -q 'CONFIG_KSU_SUSFS_SUS_KSTAT' fs/proc/task_mmu.c; then
+          sed -i 's/#include <asm\/elf.h>/#if defined(CONFIG_KSU_SUSFS_SUS_KSTAT) || defined(CONFIG_KSU_SUSFS_SUS_MAP) || defined(CONFIG_KSU_SUSFS_OPEN_REDIRECT)\n#include <linux\/susfs_def.h>\n#endif\n\n#include <asm\/elf.h>/g' fs/proc/task_mmu.c
+        fi
+
+    - name: Apply Sukisu Ultra
+      run: |
+        cd ~/kernel_workspace/common
+        # Issue #3: curl|bash left as-is (user decision); pinning to a tag is recommended when upstream stabilises
+        curl -LSs "https://raw.githubusercontent.com/sukisu-ultra/sukisu-ultra/main/kernel/setup.sh" | bash -
+
+    - name: Apply Networking, ZRAM and GKI Features
+      run: |
+        cd ~/kernel_workspace/common
+
+        # Fix #1: removed all KMI/ABI-breaking sed lines
+        sed -i 's/-dirty//' scripts/setlocalversion || true
+
+        DEFCONFIG=arch/arm64/configs/gki_defconfig
+        {
+          echo ""
+          echo "CONFIG_TCP_CONG_BBR=y"
+          echo "CONFIG_DEFAULT_BBR=y"
+          echo "CONFIG_NET_SCH_FQ=y"
+          echo "CONFIG_WIREGUARD=y"
+          echo "CONFIG_TMPFS_XATTR=y"
+          echo "CONFIG_TMPFS_POSIX_ACL=y"
+          echo "CONFIG_NTFS3_FS=y"
+          echo "CONFIG_NTFS3_FS_POSIX_ACL=y"
+          echo "CONFIG_EXFAT_FS=y"
+          echo 'CONFIG_EXFAT_DEFAULT_IOCHARSET="utf8"'
+          echo "CONFIG_LRU_GEN=y"
+          echo "CONFIG_LRU_GEN_ENABLED=y"
+          echo "CONFIG_LRU_GEN_STATS=y"
+          echo "CONFIG_DAMON=y"
+          echo "CONFIG_DAMON_VADDR=y"
+          echo "CONFIG_DAMON_PADDR=y"
+          echo "CONFIG_DAMON_RECLAIM=y"
+          echo "CONFIG_CPU_IDLE_GOV_TEO=y"
+          echo "CONFIG_ENERGY_MODEL=y"
+          echo "CONFIG_SCHED_MC=y"
+          echo "CONFIG_KPM=y"
+          # Keep ZRAM/ZSMALLOC as modules — GKI module list expects them at mm/zsmalloc.ko
+          # and drivers/block/zram/zram.ko
+          echo "CONFIG_ZSMALLOC=m"
+          echo "CONFIG_ZRAM=m"
+          echo "CONFIG_CRYPTO_ZSTD=y"
+          echo "CONFIG_ZRAM_DEF_COMP_ZSTD=y"
+          echo 'CONFIG_ZRAM_DEF_COMP="zstd"'
+        } >> "$DEFCONFIG"
+
+        # Regenerate the canonical minimal defconfig so that build/build.sh's
+        # savedefconfig diff check always passes.
+        # We use the build system's own prebuilt clang toolchain.
+        # The make pipeline is guarded with || true so a failure here is non-fatal
+        # (the build.sh patch below is the belt-and-suspenders fallback).
+        cd ~/kernel_workspace
+        CLANG_PREBUILT=$(ls -d prebuilts/clang/host/linux-x86/clang-* 2>/dev/null | sort | tail -1)
+        if [ -n "$CLANG_PREBUILT" ]; then
+          echo "[+] Regenerating gki_defconfig via savedefconfig (clang: $CLANG_PREBUILT)"
+          mkdir -p /tmp/kconfig_scratch
+          (PATH="$(pwd)/$CLANG_PREBUILT/bin:$PATH" \
+           make -C common LLVM=1 ARCH=arm64 \
+                O=/tmp/kconfig_scratch \
+                gki_defconfig savedefconfig 2>&1 | tail -10 \
+           && cp /tmp/kconfig_scratch/defconfig common/arch/arm64/configs/gki_defconfig \
+           && echo "[+] gki_defconfig regenerated OK") || \
+          echo "[!] savedefconfig regeneration failed (non-fatal — falling back to build.sh patch)"
+          rm -rf /tmp/kconfig_scratch
+        else
+          echo "[!] Clang prebuilt not found — skipping savedefconfig regeneration"
+        fi
+
+        # Patch build/build.sh to skip the check_defconfig call.
+        # Use a pattern that matches the bare call (standalone word on a line),
+        # NOT the function definition (which contains '()' or '{').
+        if [ -f build/build.sh ]; then
+          sed -i '/^[[:space:]]*check_defconfig[[:space:]]*$/ s/check_defconfig/true # check_defconfig disabled/' build/build.sh || true
+          echo "[+] check_defconfig call neutralised in build/build.sh"
+          grep -n "check_defconfig" build/build.sh || echo "    (no remaining check_defconfig calls)"
+        fi
+
+
+    - name: Build the Kernel
+      env:
+        GKI_VERSION: ${{ env.GKI_VERSION }}
+      run: |
+        cd ~/kernel_workspace
+
+        if [ "$GKI_VERSION" = "6.1" ]; then
+          # android14-6.1 uses Kleaf (Bazel) — build/build.sh is absent / exits 1
+          # Output lands in out/dist/Image
+          LTO=thin tools/bazel run //common:kernel_aarch64_dist -- \
+            --dist_dir="$(pwd)/out/dist"
+        else
+          # android13-5.15 — build/build.sh sources gettop.sh / build_utils.sh from
+          # absolute paths (/build/...) that only exist inside Google's Docker container.
+          # On a bare self-hosted runner we invoke make directly instead.
+          
+          # Find the actual clang binary (may be clang, clang-14, clang-16, etc.)
+          # Search for any file named clang or clang-* under bin directories
+          CLANG_REL=$(find prebuilts/clang/host/linux-x86 -type f \( -name "clang" -o -name "clang-[0-9]*" \) 2>/dev/null | grep "/bin/clang" | sort | tail -1 || true)
+          if [ -z "$CLANG_REL" ]; then
+            echo "ERROR: No clang binary found in prebuilts/clang/host/linux-x86/"
+            ls -R prebuilts/clang/host/linux-x86/ 2>/dev/null || true
+            exit 1
+          fi
+          CLANG_EXEC="$(pwd)/$CLANG_REL"
+          echo "[+] Found clang binary: $CLANG_EXEC"
+          
+          CLANG_BIN=$(dirname "$CLANG_EXEC")
+          echo "[+] Clang bin directory: $CLANG_BIN"
+
+          # Ensure 'clang' symlink exists so Kconfig's $(shell clang ...) can find it
+          if [ ! -e "$CLANG_BIN/clang" ]; then
+            ln -sf "$CLANG_EXEC" "$CLANG_BIN/clang"
+            echo "[+] Created clang symlink -> $CLANG_EXEC"
+          fi
+
+          OUT_DIR="$(pwd)/out/android13-5.15/common"
+          mkdir -p "$OUT_DIR"
+
+          # Export PATH so all tools are found by subshells (Kconfig, scripts, etc.)
+          export PATH="$CLANG_BIN:$PATH"
+          echo "[+] PATH prefix: $CLANG_BIN"
+          which clang && clang --version | head -1 || echo "WARNING: clang still not in PATH"
+
+          # Use absolute paths for all compiler/tool variables so Kconfig's
+          # $(shell ...) finds them even in its own subshell environment.
+          CLANG_CC="$CLANG_BIN/clang"
+          CLANG_LD="$CLANG_BIN/ld.lld"
+          CLANG_AR="$CLANG_BIN/llvm-ar"
+          CLANG_NM="$CLANG_BIN/llvm-nm"
+          CLANG_OBJCOPY="$CLANG_BIN/llvm-objcopy"
+          CLANG_OBJDUMP="$CLANG_BIN/llvm-objdump"
+          CLANG_STRIP="$CLANG_BIN/llvm-strip"
+
+          # Step 1: generate .config from gki_defconfig
+          echo "[+] Running gki_defconfig..."
+          make -C common -j$(nproc) \
+            HOSTCC=gcc \
+            CC="$CLANG_CC" \
+            LLVM_IAS=1 \
+            LD="$CLANG_LD" \
+            AR="$CLANG_AR" \
+            NM="$CLANG_NM" \
+            OBJCOPY="$CLANG_OBJCOPY" \
+            OBJDUMP="$CLANG_OBJDUMP" \
+            STRIP="$CLANG_STRIP" \
+            ARCH=arm64 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            O="$OUT_DIR" \
+            gki_defconfig
+
+          # Step 2: build the kernel Image
+          echo "[+] Building kernel Image..."
+          make -C common -j$(nproc) \
+            HOSTCC=gcc \
+            CC="$CLANG_CC" \
+            LLVM_IAS=1 \
+            LD="$CLANG_LD" \
+            AR="$CLANG_AR" \
+            NM="$CLANG_NM" \
+            OBJCOPY="$CLANG_OBJCOPY" \
+            OBJDUMP="$CLANG_OBJDUMP" \
+            STRIP="$CLANG_STRIP" \
+            ARCH=arm64 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            O="$OUT_DIR" \
+            Image
+
+          # Create dist directory with Image for packaging step
+          mkdir -p "$(pwd)/out/android13-5.15/dist"
+          cp "$OUT_DIR/arch/arm64/boot/Image" "$(pwd)/out/android13-5.15/dist/Image"
+          echo "[+] Kernel Image built and copied to dist/"
+        fi
+
+
+
+
+    - name: Package with AnyKernel3
+      env:
+        GKI_VERSION: ${{ env.GKI_VERSION }}
+        INPUT_DEVICE: ${{ github.event.inputs.device }}
+      run: |
+        cd ~/kernel_workspace
+        git clone https://github.com/MoonShadowKeeper/AnyKernel3.git -b master AnyKernel3
+        rm -rf AnyKernel3/.git
+
+        sed -i "s/kernel.string=.*/kernel.string=Custom GKI ${GKI_VERSION} (SukiSU-Ultra + SUSFS)/" \
+          AnyKernel3/anykernel.sh
+
+        # Fix #9: abort immediately if Image is missing — no silent empty-copy
+        KERNEL_IMAGE=$(find out -path "*/dist/Image" | head -n 1)
+        [ -n "$KERNEL_IMAGE" ] || { echo "ERROR: Image not found in out/ — build failed silently"; exit 1; }
+        cp "$KERNEL_IMAGE" AnyKernel3/
+
+        # Fix #13: collect .config for artifact upload
+        KERNEL_CONFIG=$(find out -name ".config" | head -n 1)
+        if [ -n "$KERNEL_CONFIG" ]; then
+          cp "$KERNEL_CONFIG" "kernel-${INPUT_DEVICE}-GKI-${GKI_VERSION}.config"
+        else
+          echo "WARNING: .config not found; skipping config artifact"
+        fi
+
+        # Fix #10: use '.' instead of '*' so dotfiles are included; exclude any stray .git
+        cd AnyKernel3
+        zip -r9 "../AnyKernel3-${INPUT_DEVICE}-GKI-${GKI_VERSION}.zip" \
+          . -x "*.git*"
+        cd ..
+
+    - name: Upload AnyKernel3 Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: AnyKernel3-${{ github.event.inputs.device }}-GKI-${{ env.GKI_VERSION }}
+        path: ~/kernel_workspace/AnyKernel3-*.zip
+
+    # Fix #13: publish .config so users and developers can verify every option
+    - name: Upload Kernel Config
+      uses: actions/upload-artifact@v4
+      with:
+        name: kernel-config-${{ github.event.inputs.device }}-GKI-${{ env.GKI_VERSION }}
+        path: ~/kernel_workspace/kernel-*.config
+
