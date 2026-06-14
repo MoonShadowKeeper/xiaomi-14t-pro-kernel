@@ -170,6 +170,17 @@ jobs:
           --dist_dir="$WORKSPACE/out/dist"
         ccache --show-stats
 
+    - name: Verify Kernel Configuration
+      run: |
+        # Find the final .config produced by Bazel
+        FINAL_CONFIG=$(find "$WORKSPACE/out" -name ".config" -type f 2>/dev/null | tail -1)
+        if [ -z "$FINAL_CONFIG" ]; then
+          echo "::error::No .config found in $WORKSPACE/out — Bazel build may have failed"
+          exit 1
+        fi
+        echo "Verifying: $FINAL_CONFIG"
+        python3 "$GITHUB_WORKSPACE/scripts/verify_kernel_config.py" "$FINAL_CONFIG"
+
     - name: Package with AnyKernel3
       run: |
         cd "$WORKSPACE"
