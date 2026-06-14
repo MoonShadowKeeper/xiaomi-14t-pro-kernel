@@ -75,7 +75,7 @@ jobs:
         git clean -fdx
         cp -rv ../susfs4ksu/kernel_patches/fs/* fs/
         cp -rv ../susfs4ksu/kernel_patches/include/linux/* include/linux/
-        patch -p1 < "../susfs4ksu/kernel_patches/${SUSFS_PATCH}"
+        patch -p1 --forward < "../susfs4ksu/kernel_patches/${SUSFS_PATCH}" || true
         if ! grep -q 'CONFIG_KSU_SUSFS_SUS_MOUNT' fs/namespace.c; then
           sed -i 's/#include "pnode.h"/#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n#include <linux\/susfs_def.h>\n#endif\n\n#include "pnode.h"/g' fs/namespace.c
           sed -i 's/#include "internal.h"/#include "internal.h"\n\n#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\nextern bool susfs_is_current_ksu_domain(void);\nextern struct static_key_true susfs_is_sdcard_android_data_not_decrypted;\n\n#define CL_COPY_MNT_NS BIT(25)\n#endif/g' fs/namespace.c
