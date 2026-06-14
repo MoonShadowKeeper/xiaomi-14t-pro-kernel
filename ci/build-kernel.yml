@@ -359,7 +359,7 @@ jobs:
           retention-days: 7
 
       - name: 🏷️ Create GitHub Release
-        if: ${{ github.event.inputs.UPLOAD_RELEASE == 'true' }}
+        if: ${{ inputs.UPLOAD_RELEASE }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: "gki-v6.1.138-${{ env.BUILD_DATE }}"
