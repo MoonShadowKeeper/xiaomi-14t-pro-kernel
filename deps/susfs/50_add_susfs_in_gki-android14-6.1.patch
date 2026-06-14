@@ -402,9 +402,10 @@ index 8e9c0b567..885110e88 100644
  	do_delayed_call(&done);
  	return res;
 diff --git a/fs/namespace.c b/fs/namespace.c
+index f22f76d9c..a008fdadf 100644
 --- a/fs/namespace.c
 +++ b/fs/namespace.c
-@@ -32,9 +32,20 @@
+@@ -32,10 +32,21 @@
  #include <linux/fs_context.h>
  #include <linux/shmem_fs.h>
  #include <linux/mnt_idmapping.h>
@@ -414,7 +415,7 @@ diff --git a/fs/namespace.c b/fs/namespace.c
  
  #include "pnode.h"
  #include "internal.h"
-+
+ 
 +#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
 +extern bool susfs_is_current_ksu_domain(void);
 +extern struct static_key_true susfs_is_sdcard_android_data_not_decrypted;
@@ -422,10 +423,11 @@ diff --git a/fs/namespace.c b/fs/namespace.c
 +#define CL_COPY_MNT_NS BIT(25) /* used by copy_mnt_ns() */
 +
 +#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
- #include <trace/hooks/blk.h>
- 
++
  /* Maximum number of mounts in a mount namespace */
-@@ -145,6 +156,11 @@
+ static unsigned int sysctl_mount_max __read_mostly = 100000;
+ 
+@@ -144,6 +155,11 @@ static int mnt_alloc_id(struct mount *mnt)
  
  static void mnt_free_id(struct mount *mnt)
  {
@@ -437,7 +439,7 @@ diff --git a/fs/namespace.c b/fs/namespace.c
  	ida_free(&mnt_id_ida, mnt->mnt_id);
  }
  
-@@ -153,7 +169,25 @@
+@@ -152,7 +168,25 @@ static void mnt_free_id(struct mount *mnt)
   */
  static int mnt_alloc_group_id(struct mount *mnt)
  {
@@ -463,11 +465,10 @@ diff --git a/fs/namespace.c b/fs/namespace.c
  
  	if (res < 0)
  		return res;
-@@ -202,6 +236,119 @@
- 	return mnt->mnt_count;
+@@ -202,6 +236,119 @@ int mnt_get_count(struct mount *mnt)
  #endif
  }
-+
+ 
 +#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
 +/* A copy of alloc_vfsmnt() but allocates the fake mnt_id for mounts
 + * that are unshared by ksu process
@@ -580,10 +581,11 @@ diff --git a/fs/namespace.c b/fs/namespace.c
 +	return NULL;
 +}
 +#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
- 
++
  static struct mount *alloc_vfsmnt(const char *name)
  {
-@@ -1020,7 +1167,21 @@
+ 	struct mount *mnt = kmem_cache_zalloc(mnt_cache, GFP_KERNEL);
+@@ -1019,7 +1166,21 @@ struct vfsmount *vfs_create_mount(struct fs_context *fc)
  	if (!fc->root)
  		return ERR_PTR(-EINVAL);
  
@@ -605,7 +607,7 @@ diff --git a/fs/namespace.c b/fs/namespace.c
  	if (!mnt)
  		return ERR_PTR(-ENOMEM);
  
-@@ -1106,8 +1267,42 @@
+@@ -1105,8 +1266,42 @@ static struct mount *clone_mnt(struct mount *old, struct dentry *root,
  	struct super_block *sb = old->mnt.mnt_sb;
  	struct mount *mnt;
  	int err;
@@ -648,19 +650,19 @@ diff --git a/fs/namespace.c b/fs/namespace.c
  	if (!mnt)
  		return ERR_PTR(-ENOMEM);
  
-@@ -1124,6 +1319,11 @@
- 
+@@ -1124,6 +1319,11 @@ static struct mount *clone_mnt(struct mount *old, struct dentry *root,
  	mnt->mnt.mnt_flags = old->mnt.mnt_flags;
  	mnt->mnt.mnt_flags &= ~(MNT_WRITE_HOLD|MNT_MARKED|MNT_INTERNAL);
-+
+ 
 +#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
 +	if (unlikely(is_mnt_ksu_unshared))
 +		mnt->mnt.mnt_flags |= VFSMOUNT_MNT_FLAGS_KSU_UNSHARED_MNT;
 +#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
- 
++
  	atomic_inc(&sb->s_active);
  	mnt->mnt.mnt_userns = mnt_user_ns(&old->mnt);
-@@ -3518,6 +3718,9 @@
+ 	if (!initial_idmapping(mnt->mnt.mnt_userns))
+@@ -3515,6 +3715,9 @@ struct mnt_namespace *copy_mnt_ns(unsigned long flags, struct mnt_namespace *ns,
  	copy_flags = CL_COPY_UNBINDABLE | CL_EXPIRE;
  	if (user_ns != ns->user_ns)
  		copy_flags |= CL_SHARED_TO_SLAVE;
@@ -670,10 +672,11 @@ diff --git a/fs/namespace.c b/fs/namespace.c
  	new = copy_tree(old, old->mnt.mnt_root, copy_flags);
  	if (IS_ERR(new)) {
  		namespace_unlock();
-@@ -4766,3 +4969,34 @@
+@@ -4762,3 +4965,34 @@ static int __init init_fs_namespace_sysctls(void)
+ fs_initcall(init_fs_namespace_sysctls);
  
  #endif /* CONFIG_SYSCTL */
- 
++
 +#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
 +/* - To retrieve the non sus mnt_id from mount */
 +int susfs_get_non_sus_mnt_id_from_mnt(struct mount *orig_mnt) {
@@ -704,7 +707,7 @@ diff --git a/fs/namespace.c b/fs/namespace.c
 +	return &mnt->mnt;
 +}
 +#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
-+
+\ No newline at end of file
 diff --git a/fs/notify/fdinfo.c b/fs/notify/fdinfo.c
 index dd5bc6ffa..9cf521b12 100644
 --- a/fs/notify/fdinfo.c
