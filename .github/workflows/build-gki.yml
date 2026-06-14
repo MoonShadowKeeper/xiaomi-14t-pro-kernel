@@ -3,6 +3,9 @@ name: Build Custom GKI Kernel (Xiaomi 14T Pro)
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     name: Build Kernel
@@ -15,6 +18,11 @@ jobs:
       SUSFS_BRANCH: gki-android14-6.1
       SUSFS_PATCH: 50_add_susfs_in_gki-android14-6.1.patch
       GKI_VERSION: "6.1"
+      KERNEL_VERSION: "6.1.118"
+      COMPILATION_TIME: "2025-11-17"
+      SUKISU_VERSION: "40128"
+      SUSFS_VERSION: "2.0.0"
+      MANAGER_NAME: "SukiSU-Ultra"
 
     defaults:
       run:
@@ -229,6 +237,48 @@ jobs:
         name: kernel-config-Xiaomi-14T-Pro-GKI-${{ env.GKI_VERSION }}
         path: ${{ env.WORKSPACE }}/kernel-*.config
         if-no-files-found: error
+
+    - name: Create GitHub Release
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        cd "$WORKSPACE"
+
+        mapfile -t RELEASE_ZIPS < <(find "$WORKSPACE" -maxdepth 1 -name "AnyKernel3-Xiaomi-14T-Pro-GKI-${GKI_VERSION}.zip" -type f)
+        if [[ ${#RELEASE_ZIPS[@]} -ne 1 ]]; then
+          echo "::error::Expected exactly 1 release ZIP, found ${#RELEASE_ZIPS[@]}"
+          printf '  %s\n' "${RELEASE_ZIPS[@]}"
+          exit 1
+        fi
+
+        mapfile -t RELEASE_CONFIGS < <(find "$WORKSPACE" -maxdepth 1 -name "kernel-Xiaomi-14T-Pro-GKI-${GKI_VERSION}.config" -type f)
+        RELEASE_TAG="xiaomi-14t-pro-gki-${KERNEL_VERSION}-sukisu-${SUKISU_VERSION}-susfs-${SUSFS_VERSION}-${GITHUB_RUN_NUMBER}"
+        RELEASE_TITLE="Xiaomi 14T Pro GKI ${KERNEL_VERSION} | ${MANAGER_NAME} ${SUKISU_VERSION} | SUSFS ${SUSFS_VERSION}"
+
+        cat > release-notes.md <<EOF
+        ## Xiaomi 14T Pro Custom GKI Kernel
+
+        - Compilation time: ${COMPILATION_TIME}
+        - Kernel version: ${KERNEL_VERSION}
+        - SukiSU Version: ${SUKISU_VERSION}
+        - SusFS Version: ${SUSFS_VERSION}
+        - Manager: ${MANAGER_NAME}
+        - GKI base: ${GKI_VERSION}
+        - Manifest branch: ${MANIFEST_BRANCH}
+        - SUSFS branch: ${SUSFS_BRANCH}
+        - Commit: ${GITHUB_SHA}
+        - Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+        EOF
+
+        RELEASE_ASSETS=("${RELEASE_ZIPS[0]}")
+        if [[ ${#RELEASE_CONFIGS[@]} -ge 1 ]]; then
+          RELEASE_ASSETS+=("${RELEASE_CONFIGS[0]}")
+        fi
+
+        gh release create "$RELEASE_TAG" "${RELEASE_ASSETS[@]}" \
+          --title "$RELEASE_TITLE" \
+          --notes-file release-notes.md \
+          --target "$GITHUB_SHA"
 
     - name: ccache Statistics
       if: always()
