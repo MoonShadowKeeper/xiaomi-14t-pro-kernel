@@ -49,6 +49,12 @@ jobs:
       # ─────────────────────────────────────────────────
       # 1. SELF-HOSTED RUNNER SETUP
       # ─────────────────────────────────────────────────
+      - name: 📦 Checkout repo (vendored deps)
+        uses: actions/checkout@v4
+        with:
+          path: repo
+
+
       - name: 🧹 Clean build artifacts (keep kernel_workspace cache)
         run: |
           # Keep kernel_workspace between runs for fast incremental repo sync.
@@ -126,48 +132,62 @@ jobs:
           bash /tmp/sukisu_setup.sh "${{ env.SUKISU_REF }}"
           echo "SukiSU Ultra integrated ✓"
 
-      - name: 🕵️ Apply SUSFS v2.1+ patches
+      - name: 🕵️ Apply SUSFS v2.1+ (vendored)
         run: |
-          SUSFS_DIR=/tmp/susfs4ksu
-          rm -rf "$SUSFS_DIR"
-          git clone --depth=1 \
-            --branch "${{ github.event.inputs.SUSFS_BRANCH }}" \
-            "${{ env.SUSFS_GITLAB }}" "$SUSFS_DIR"
-
+          DEPS="$GITHUB_WORKSPACE/repo/deps/susfs"
           cd kernel_workspace/common
 
           # SUSFS new source files (no conflict — fresh files)
-          cp "$SUSFS_DIR"/kernel_patches/fs/* fs/ 2>/dev/null || true
-          cp "$SUSFS_DIR"/kernel_patches/include/linux/* include/linux/ 2>/dev/null || true
+          cp "$DEPS"/fs/susfs.c fs/ 2>/dev/null || true
+          cp "$DEPS"/include/linux/susfs*.h include/linux/ 2>/dev/null || true
 
-          PATCH=""
-          for p in \
-            "$SUSFS_DIR/kernel_patches/50_add_susfs_in_${{ github.event.inputs.SUSFS_BRANCH }}.patch" \
-            "$SUSFS_DIR/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch" \
-            "$SUSFS_DIR/kernel_patches/50_add_susfs_in_kernel.patch"; do
-            [ -f "$p" ] && PATCH="$p" && break
-          done
+          PATCH="$DEPS/50_add_susfs_in_gki-android14-6.1.patch"
+          [ -f "$PATCH" ] || { echo "::error::vendored SUSFS patch missing at $PATCH"; exit 1; }
+          echo "Using vendored SUSFS patch: $PATCH"
 
-          if [ -z "$PATCH" ]; then
-            echo "::error::SUSFS patch file not found in repo."
-            ls -la "$SUSFS_DIR/kernel_patches"
-            exit 1
-          fi
-          echo "Using SUSFS patch: $PATCH"
-
-          # The patch targets a specific ACK snapshot. To adapt it to the current
-          # HEAD we use git's 3-way merge, which needs the base blobs from history.
-          echo "Deepening common/ history for 3-way merge..."
-          git fetch -q --unshallow 2>/dev/null || git fetch -q --depth=2000 2>/dev/null || true
-
-          if git apply --3way --whitespace=nowarn "$PATCH"; then
-            echo "SUSFS applied cleanly via git apply --3way ✓"
+          # Patch is regenerated to match current ACK 6.1.172, so direct apply works.
+          # Fall back to 3-way (deepens history) only if HEAD drifts in the future.
+          if git apply --whitespace=nowarn "$PATCH"; then
+            echo "SUSFS applied directly ✓"
           else
-            echo "::error::SUSFS 3-way merge produced conflicts. Check .rej / conflict markers."
-            git --no-pager diff --name-only --diff-filter=U || true
-            grep -rl '<<<<<<<' fs/ include/ kernel/ mm/ drivers/ 2>/dev/null | head -20 || true
-            exit 1
+            echo "Direct apply failed — trying 3-way after deepening history..."
+            git fetch --unshallow https://android.googlesource.com/kernel/common 2>/dev/null \
+              || git fetch --depth=20000 https://android.googlesource.com/kernel/common 2>/dev/null || true
+            if git apply --3way --whitespace=nowarn "$PATCH"; then
+              echo "SUSFS applied via 3-way ✓"
+            else
+              echo "::error::SUSFS patch failed. ACK HEAD likely drifted — regenerate deps/susfs patch."
+              git --no-pager diff --name-only --diff-filter=U || true
+              exit 1
+            fi
           fi
+
+      - name: 🛡️ Integrate Baseband Guard (vendored)
+        run: |
+          DEPS="$GITHUB_WORKSPACE/repo/deps/baseband-guard"
+          cd kernel_workspace/common
+
+          # Vendor BBG into the kernel tree
+          rm -rf Baseband-guard
+          cp -r "$DEPS" Baseband-guard
+
+          # Wire into security/ (mirrors BBG setup.sh modern-LSM path)
+          ln -sfn ../Baseband-guard security/baseband-guard
+          grep -q 'baseband-guard/baseband_guard.o' security/Makefile || \
+            grep -q 'obj-$(CONFIG_BBG)' security/Makefile || \
+            printf '\nobj-$(CONFIG_BBG) += baseband-guard/\n' >> security/Makefile
+
+          if ! grep -q 'security/baseband-guard/Kconfig' security/Kconfig; then
+            awk '
+              { a[NR]=$0 } END{
+                last=0; for(i=1;i<=NR;i++) if(a[i] ~ /^endmenu[[:space:]]*$/) last=i;
+                for(i=1;i<=NR;i++){
+                  if(i==last) print "source \"security/baseband-guard/Kconfig\"";
+                  print a[i];
+                }
+              }' security/Kconfig > security/Kconfig.tmp && mv security/Kconfig.tmp security/Kconfig
+          fi
+          echo "Baseband Guard integrated ✓"
 
       # ─────────────────────────────────────────────────
       # 4. FEATURE CONFIG FRAGMENT
@@ -180,20 +200,18 @@ jobs:
           cat >> "$DEFCFG" <<'EOF'
           CONFIG_KSU=y
           CONFIG_KSU_SUSFS=y
-          CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y
           CONFIG_KSU_SUSFS_SUS_PATH=y
           CONFIG_KSU_SUSFS_SUS_MOUNT=y
-          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y
-          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y
           CONFIG_KSU_SUSFS_SUS_KSTAT=y
-          CONFIG_KSU_SUSFS_SUS_OVERLAYFS=y
-          CONFIG_KSU_SUSFS_TRY_UMOUNT=y
-          CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT=y
+          CONFIG_KSU_SUSFS_SUS_MAP=y
           CONFIG_KSU_SUSFS_SPOOF_UNAME=y
-          CONFIG_KSU_SUSFS_ENABLE_LOG=y
-          CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
           CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
           CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+          CONFIG_KSU_SUSFS_ENABLE_LOG=y
+          CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
+          CONFIG_BBG=y
+          CONFIG_TMPFS_XATTR=y
+          CONFIG_TMPFS_POSIX_ACL=y
           CONFIG_KPM=y
           CONFIG_KALLSYMS=y
           CONFIG_KALLSYMS_ALL=y
