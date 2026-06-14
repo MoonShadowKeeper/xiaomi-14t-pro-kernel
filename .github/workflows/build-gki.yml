@@ -79,36 +79,13 @@ jobs:
         cp -rv ../susfs4ksu/kernel_patches/fs/* fs/
         cp -rv ../susfs4ksu/kernel_patches/include/linux/* include/linux/
 
-        # Apply the main SUSFS patch - ignore failures (offset/fuzz issues are OK)
-        set +e
-        patch -p1 --forward < "../susfs4ksu/kernel_patches/${SUSFS_PATCH}"
-        PATCH_EXIT=$?
-        set -e
+        # Apply the main SUSFS patch.
+        # --fuzz=5: allow up to 5 lines of context mismatch (handles Google's
+        # minor upstream changes that shift lines without changing the code we patch).
+        # This is the proper solution — no sed hacks needed.
+        patch -p1 --fuzz=5 --forward < "../susfs4ksu/kernel_patches/${SUSFS_PATCH}"
 
-        # Manual fallback for namespace.c hunk #1 if patch failed to apply it
-        if ! grep -q 'CONFIG_KSU_SUSFS_SUS_MOUNT' fs/namespace.c; then
-          echo ">> Manual fix: injecting SUSFS include into namespace.c"
-          # Insert after the last standard #include block (before pnode.h)
-          sed -i '/#include <linux\/mnt_idmapping.h>/a \
-\
-#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\
-#include <linux/susfs_def.h>\
-#endif' fs/namespace.c
-
-          # Insert extern declarations after #include "internal.h"
-          sed -i '/#include "internal.h"/a \
-\
-#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\
-extern bool susfs_is_current_ksu_domain(void);\
-extern struct static_key_true susfs_is_sdcard_android_data_not_decrypted;\
-#define CL_COPY_MNT_NS BIT(25)\
-#endif' fs/namespace.c
-          echo ">> namespace.c patched manually"
-        else
-          echo ">> namespace.c already has SUSFS, skipping manual patch"
-        fi
-
-        echo "SUSFS patch step done (exit was $PATCH_EXIT - non-zero is OK if manual fix ran)"
+        echo "SUSFS patch applied successfully"
 
     - name: Apply SukiSU Ultra (KernelSU)
       run: |
