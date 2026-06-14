@@ -157,9 +157,9 @@ jobs:
           scripts/kconfig/merge_config.sh -m \
           arch/arm64/configs/gki_defconfig \
           "$GITHUB_WORKSPACE/configs/xiaomi_14t_tweaks.config"
-        mv .config arch/arm64/configs/gki_defconfig
-        make ARCH=arm64 savedefconfig 2>/dev/null || true
-        cp defconfig arch/arm64/configs/gki_defconfig 2>/dev/null || true
+        make ARCH=arm64 olddefconfig
+        make ARCH=arm64 savedefconfig
+        cp defconfig arch/arm64/configs/gki_defconfig
 
     - name: Build the Kernel (Kleaf / Bazel)
       env:
