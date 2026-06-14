@@ -110,7 +110,7 @@ jobs:
       - name: 🔑 Integrate SukiSU Ultra
         run: |
           cd kernel_workspace/common
-          curl -LSs "https://raw.githubusercontent.com/${{ env.SUKISU_REPO }}/${{ env.SUKISU_BRANCH }}/kernel/setup.sh" -o /tmp/sukisu_setup.sh
+          curl -LSs "https://raw.githubusercontent.com/${{ env.SUKISU_REPO }}/main/kernel/setup.sh" -o /tmp/sukisu_setup.sh
           bash /tmp/sukisu_setup.sh "${{ env.SUKISU_BRANCH }}"
           echo "SukiSU Ultra integrated ✓"
 
