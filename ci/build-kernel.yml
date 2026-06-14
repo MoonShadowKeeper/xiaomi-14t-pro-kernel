@@ -1,0 +1,34 @@
+name: Build Xiaomi 14T Pro Wild KernelSU-Next
+
+permissions:
+  contents: write
+  actions: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      feature_set:
+        description: "Feature Set"
+        type: choice
+        options:
+          - FULL
+          - KSUN+SUSFS+BBG+NET+DS
+        default: FULL
+      use_repo:
+        description: "Use repo for downloading kernel source"
+        type: boolean
+        default: true
+      use_latest_commits:
+        description: "Use branch tip for KernelSU and SUSFS"
+        type: boolean
+        default: true
+
+jobs:
+  build-rothko-android14-6-1:
+    uses: ./.github/workflows/prepare.yml
+    with:
+      config_file: .github/config/android14-6.1-rothko.json
+      feature_set: ${{ inputs.feature_set || 'FULL' }}
+      use_repo: ${{ inputs.use_repo }}
+      use_latest_commits: ${{ inputs.use_latest_commits }}
+    secrets: inherit
