@@ -51,7 +51,7 @@ runs:
         SKIP_VENDOR_BOOT=1 \
         SKIP_EXT_MODULES=1 \
         SKIP_CP_KERNEL_HDR=1 \
-        OUT_DIR="${HOME}/out" \
+        OUT_DIR="${HOME:-/root}/out" \
         LTO=thin \
         BUILD_CONFIG=common/build.config.gki.aarch64 \
         build/build.sh -j"$(nproc)" \
@@ -69,43 +69,43 @@ runs:
           tools/bazel run \
             --config=fast \
             --config=stamp \
-            --disk_cache=${HOME}/.cache/bazel \
+            --disk_cache=${HOME:-/root}/.cache/bazel \
             //common:kernel_aarch64_dist \
-            -- --destdir=${HOME}/out
+            -- --destdir=${HOME:-/root}/out
         else
           tools/bazel run \
             --config=fast \
             --config=stamp \
-            --disk_cache=${HOME}/.cache/bazel \
+            --disk_cache=${HOME:-/root}/.cache/bazel \
             //common:kernel_aarch64_dist \
-            -- --dist_dir=${HOME}/out
+            -- --dist_dir=${HOME:-/root}/out
         fi
       fi
 
-      cat ${HOME}/out/common/.config || true
+      cat ${HOME:-/root}/out/common/.config || true
 
   - name: 'Gather Build Artifacts'
     shell: bash
     working-directory: ${{ github.workspace }}
     run: |
       set -euo pipefail
-      if [ -f "${HOME}/out/dist/Image" ]; then
-        echo "Found Image at ${HOME}/out/dist/Image"
+      if [ -f "${HOME:-/root}/out/dist/Image" ]; then
+        echo "Found Image at ${HOME:-/root}/out/dist/Image"
         if [[ ${{ inputs.bypass }} == "true" ]]; then
-          cp "${HOME}/out/dist/Image" "${{ github.workspace }}/AnyKernel3/Bypass-Image"
+          cp "${HOME:-/root}/out/dist/Image" "${{ github.workspace }}/AnyKernel3/Bypass-Image"
         else
-          cp "${HOME}/out/dist/Image" "${{ github.workspace }}/AnyKernel3/Image"
+          cp "${HOME:-/root}/out/dist/Image" "${{ github.workspace }}/AnyKernel3/Image"
           echo "Kernel Version:"
-          strings "${HOME}/out/dist/Image" | grep -m1 "^Linux version "
+          strings "${HOME:-/root}/out/dist/Image" | grep -m1 "^Linux version "
         fi
           exit 0
         fi
-      if [ -f "${HOME}/out/Image" ]; then
-        echo "Found Image at ${HOME}/out/Image"
+      if [ -f "${HOME:-/root}/out/Image" ]; then
+        echo "Found Image at ${HOME:-/root}/out/Image"
         if [[ ${{ inputs.bypass }} == "true" ]]; then
-          cp "${HOME}/out/Image" "${{ github.workspace }}/AnyKernel3/Bypass-Image"
+          cp "${HOME:-/root}/out/Image" "${{ github.workspace }}/AnyKernel3/Bypass-Image"
         else
-          cp "${HOME}/out/Image" "${{ github.workspace }}/AnyKernel3/Image"
+          cp "${HOME:-/root}/out/Image" "${{ github.workspace }}/AnyKernel3/Image"
         fi
         exit 0
       fi
