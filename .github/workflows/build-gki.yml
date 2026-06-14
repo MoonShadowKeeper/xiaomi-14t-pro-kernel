@@ -146,47 +146,15 @@ jobs:
         # Remove -dirty suffix from kernel version string
         sed -i 's/-dirty//' scripts/setlocalversion || true
 
-        DEFCONFIG=arch/arm64/configs/gki_defconfig
-        {
-        printf '\n'
-        printf '# === Networking ===\n'
-        printf 'CONFIG_TCP_CONG_BBR=y\n'
-        printf 'CONFIG_DEFAULT_BBR=y\n'
-        printf 'CONFIG_NET_SCH_FQ=y\n'
-        printf 'CONFIG_WIREGUARD=y\n'
-        printf '\n'
-        printf '# === Filesystem ===\n'
-        printf 'CONFIG_TMPFS_XATTR=y\n'
-        printf 'CONFIG_TMPFS_POSIX_ACL=y\n'
-        printf 'CONFIG_NTFS3_FS=y\n'
-        printf 'CONFIG_NTFS3_FS_POSIX_ACL=y\n'
-        printf 'CONFIG_EXFAT_FS=y\n'
-        printf 'CONFIG_EXFAT_DEFAULT_IOCHARSET="utf8"\n'
-        printf '\n'
-        printf '# === Memory management ===\n'
-        printf 'CONFIG_LRU_GEN=y\n'
-        printf 'CONFIG_LRU_GEN_ENABLED=y\n'
-        printf 'CONFIG_LRU_GEN_STATS=y\n'
-        printf 'CONFIG_DAMON=y\n'
-        printf 'CONFIG_DAMON_VADDR=y\n'
-        printf 'CONFIG_DAMON_PADDR=y\n'
-        printf 'CONFIG_DAMON_RECLAIM=y\n'
-        printf '\n'
-        printf '# === Power ===\n'
-        printf 'CONFIG_CPU_IDLE_GOV_TEO=y\n'
-        printf 'CONFIG_ENERGY_MODEL=y\n'
-        printf 'CONFIG_SCHED_MC=y\n'
-        printf '\n'
-        printf '# === KPM / KernelSU modules ===\n'
-        printf 'CONFIG_KPM=y\n'
-        printf '\n'
-        printf '# === ZRAM with ZSTD ===\n'
-        printf 'CONFIG_ZSMALLOC=m\n'
-        printf 'CONFIG_ZRAM=m\n'
-        printf 'CONFIG_CRYPTO_ZSTD=y\n'
-        printf 'CONFIG_ZRAM_DEF_COMP_ZSTD=y\n'
-        printf 'CONFIG_ZRAM_DEF_COMP="zstd"\n'
-        } >> "$DEFCONFIG"
+        # Kleaf validates defconfig via savedefconfig — we must not append raw lines.
+        # Instead we use merge_config.sh with a fragment file checked into the repo.
+        ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
+          scripts/kconfig/merge_config.sh -m \
+          arch/arm64/configs/gki_defconfig \
+          "$GITHUB_WORKSPACE/configs/xiaomi_14t_tweaks.config"
+        mv .config arch/arm64/configs/gki_defconfig
+        make ARCH=arm64 savedefconfig 2>/dev/null || true
+        cp defconfig arch/arm64/configs/gki_defconfig 2>/dev/null || true
 
     - name: Build the Kernel (Kleaf / Bazel)
       env:
