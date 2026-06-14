@@ -18,7 +18,7 @@ on:
       ENABLE_KPM:
         description: "Enable KPM (Kernel Plugin Module)"
         required: false
-        default: "true"
+        default: "false"
         type: boolean
       UPLOAD_RELEASE:
         description: "Upload GitHub Release"
@@ -73,6 +73,15 @@ jobs:
           else
             echo "::warning::apt-get not found — make sure build deps are installed"
           fi
+
+      - name: 🕒 Set WildKernels build timestamp
+        run: |
+          FIXED_BUILD_DATE="2025-06-05 04:20:00 UTC"
+          SOURCE_DATE_EPOCH=$(date -u -d "$FIXED_BUILD_DATE" +%s)
+          echo "SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH" >> "$GITHUB_ENV"
+          echo "KBUILD_BUILD_TIMESTAMP=$(date -u -d @${SOURCE_DATE_EPOCH} '+%a %b %d %H:%M:%S UTC %Y')" >> "$GITHUB_ENV"
+          echo "GIT_COMMITTER_DATE=$(date -u -d @${SOURCE_DATE_EPOCH} '+%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_ENV"
+          echo "GIT_AUTHOR_DATE=$(date -u -d @${SOURCE_DATE_EPOCH} '+%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_ENV"
 
       - name: 🔧 Install repo tool
         run: |
@@ -271,6 +280,27 @@ jobs:
             fi
           done
           grep -rn "POST_DEFCONFIG_CMDS" build.config.* || true
+
+      - name: 🏷️ Apply WildKernels branding + module version bypass
+        run: |
+          cd kernel_workspace/common
+
+          # Match WildKernels uname -r format: 6.1.138-android14-Wild
+          sed -i '$d' scripts/setlocalversion
+          echo 'echo "-android14-Wild"' >> scripts/setlocalversion
+          chmod +x scripts/setlocalversion
+
+          # WildKernels bypass: accept stock vendor modules even when vermagic differs.
+          TARGET_FILE="kernel/module/version.c"
+          if [ -f "$TARGET_FILE" ]; then
+            sed -i '/bad_version:/{:a;n;/return 0;/{s/return 0;/return 1;/;b};ba}' "$TARGET_FILE"
+            grep -A 8 'bad_version:' "$TARGET_FILE" || true
+          else
+            echo "::error::$TARGET_FILE not found for module version bypass"
+            exit 1
+          fi
+
+          git add -A && git commit -q -m "Wild: branding and module version bypass" || true
 
       - name: 🧼 Clean dirty flags (vermagic must match for vendor modules)
         run: |
