@@ -255,20 +255,20 @@ jobs:
         RELEASE_TAG="xiaomi-14t-pro-gki-${KERNEL_VERSION}-sukisu-${SUKISU_VERSION}-susfs-${SUSFS_VERSION}-${GITHUB_RUN_NUMBER}"
         RELEASE_TITLE="Xiaomi 14T Pro GKI ${KERNEL_VERSION} | ${MANAGER_NAME} ${SUKISU_VERSION} | SUSFS ${SUSFS_VERSION}"
 
-        cat > release-notes.md <<EOF
-        ## Xiaomi 14T Pro Custom GKI Kernel
-
-        - Compilation time: ${COMPILATION_TIME}
-        - Kernel version: ${KERNEL_VERSION}
-        - SukiSU Version: ${SUKISU_VERSION}
-        - SusFS Version: ${SUSFS_VERSION}
-        - Manager: ${MANAGER_NAME}
-        - GKI base: ${GKI_VERSION}
-        - Manifest branch: ${MANIFEST_BRANCH}
-        - SUSFS branch: ${SUSFS_BRANCH}
-        - Commit: ${GITHUB_SHA}
-        - Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
-        EOF
+        {
+          echo "## Xiaomi 14T Pro Custom GKI Kernel"
+          echo
+          echo "- Compilation time: ${COMPILATION_TIME}"
+          echo "- Kernel version: ${KERNEL_VERSION}"
+          echo "- SukiSU Version: ${SUKISU_VERSION}"
+          echo "- SusFS Version: ${SUSFS_VERSION}"
+          echo "- Manager: ${MANAGER_NAME}"
+          echo "- GKI base: ${GKI_VERSION}"
+          echo "- Manifest branch: ${MANIFEST_BRANCH}"
+          echo "- SUSFS branch: ${SUSFS_BRANCH}"
+          echo "- Commit: ${GITHUB_SHA}"
+          echo "- Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+        } > release-notes.md
 
         RELEASE_ASSETS=("${RELEASE_ZIPS[0]}")
         if [[ ${#RELEASE_CONFIGS[@]} -ge 1 ]]; then
