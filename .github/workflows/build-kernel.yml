@@ -6,7 +6,7 @@ on:
       ACK_BRANCH:
         description: "Android Common Kernel manifest branch"
         required: true
-        default: "common-android14-6.1"
+        default: "common-android14-6.1-2025-06"
       KLEAF_TARGET:
         description: "Kleaf dist target"
         required: true
@@ -264,6 +264,29 @@ jobs:
           done
           grep -rn "POST_DEFCONFIG_CMDS" build.config.* || true
 
+      - name: 🧼 Clean dirty flags (vermagic must match for vendor modules)
+        run: |
+          cd kernel_workspace
+          # Strip -maybe-dirty / -dirty so the kernel release string matches stock,
+          # otherwise stock vendor_dlkm modules fail vermagic check → bootloop.
+          sed -i "/stable_scmversion_cmd/s/-maybe-dirty//g" build/kernel/kleaf/impl/stamp.bzl 2>/dev/null || true
+          sed -i 's/-dirty//' common/scripts/setlocalversion 2>/dev/null || true
+          cd common
+          git config user.email "ci@local"; git config user.name "CI"
+          git add -A && git commit -q -m "clean dirty flag" || true
+
+      - name: 🔓 Remove protected exports (let vendor modules resolve symbols)
+        run: |
+          cd kernel_workspace
+          rm -rf common/android/abi_gki_protected_exports_* || true
+          if grep -q '\"protected_exports_list\"' common/BUILD.bazel 2>/dev/null; then
+            perl -pi -e 's/^\s*"protected_exports_list"\s*:\s*"android\/abi_gki_protected_exports_aarch64",\s*$//;' common/BUILD.bazel
+          fi
+          if grep -q '^protected_modules = ' common/modules.bzl 2>/dev/null; then
+            sed -i 's/protected_modules = \[.*\]/protected_modules = []/' common/modules.bzl
+          fi
+          ( cd common && git add -A && git commit -q -m "remove protected exports" || true )
+
       # ─────────────────────────────────────────────────
       # 5. BUILD WITH BAZEL/KLEAF
       # ─────────────────────────────────────────────────
@@ -275,6 +298,8 @@ jobs:
           set +e
           tools/bazel run "${{ github.event.inputs.KLEAF_TARGET }}" \
             --config=fast \
+            --config=stamp \
+            --disk_cache="$HOME/.cache/bazel" \
             -- --dist_dir="$(pwd)/dist" 2>&1 | tee ../build.log
           STATUS=${PIPESTATUS[0]}
           set -e
@@ -300,7 +325,7 @@ jobs:
 
           DIST="kernel_workspace/dist"
           IMAGE=""
-          for f in "$DIST/Image.gz-dtb" "$DIST/Image.gz" "$DIST/Image"; do
+          for f in "$DIST/Image" "$DIST/Image.gz" "$DIST/Image.gz-dtb"; do
             [ -f "$f" ] && IMAGE="$f" && break
           done
 
