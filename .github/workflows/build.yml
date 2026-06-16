@@ -187,10 +187,6 @@ jobs:
           CONFIG_ZRAM_DEF_COMP="zstd"
           CONFIG_CPU_IDLE_GOV_TEO=y
           CONFIG_WQ_POWER_EFFICIENT_DEFAULT=y
-          CONFIG_RCU_LAZY=y
-          CONFIG_SLUB_DEBUG=n
-          CONFIG_DEBUG_KMEMLEAK=n
-          CONFIG_DEBUG_FS=n
 
     - name: Apply Device-Specific Patches
       uses: ./.github/actions/apply-device-patches
