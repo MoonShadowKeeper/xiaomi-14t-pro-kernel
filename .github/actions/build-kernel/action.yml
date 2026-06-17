@@ -68,7 +68,6 @@ runs:
           fi
           tools/bazel run \
             --lto=full \
-            --config=fast \
             --config=stamp \
             --disk_cache=${HOME:-/root}/.cache/bazel \
             //common:kernel_aarch64_dist \
@@ -76,7 +75,6 @@ runs:
         else
           tools/bazel run \
             --lto=full \
-            --config=fast \
             --config=stamp \
             --disk_cache=${HOME:-/root}/.cache/bazel \
             //common:kernel_aarch64_dist \
